@@ -198,46 +198,71 @@ pub fn remove_dc(x: &mut Vec<f32>) -> f32 {
 
 // ---------------------------------------------------------------- 音圧
 
+/// K 特性のフィルタ。**1サンプルずつ通す。**
+///
+/// EBU R128 の簡易版。段付きハイシェルフ（頭の当たりを人の耳に合わせる）と
+/// 38Hz ハイパス（低い唸りを音圧として数えない）の2段。
+///
+/// 書き出しの [`lufs`] も、鳴らしながらの音圧計も、**同じここを通る。**
+/// 2つ持つと必ずずれる。
+#[derive(Clone, Debug, Default)]
+pub struct KFilter {
+    a: Stage,
+    b: Stage,
+}
+
+#[derive(Clone, Debug, Default)]
+struct Stage {
+    x1: f64,
+    x2: f64,
+    y1: f64,
+    y2: f64,
+}
+
+impl Stage {
+    #[inline]
+    fn run(&mut self, x0: f64, b: (f64, f64, f64), a: (f64, f64)) -> f64 {
+        let y0 = b.0 * x0 + b.1 * self.x1 + b.2 * self.x2 - a.0 * self.y1 - a.1 * self.y2;
+        self.x2 = self.x1;
+        self.x1 = x0;
+        self.y2 = self.y1;
+        self.y1 = y0;
+        y0
+    }
+}
+
+impl KFilter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[inline]
+    pub fn run(&mut self, x: f32) -> f32 {
+        let y = self.a.run(
+            x as f64,
+            (1.53512485958697, -2.69169618940638, 1.19839281085285),
+            (-1.69065929318241, 0.73248077421585),
+        ) as f32;
+        self.b.run(y as f64, (1.0, -2.0, 1.0), (-1.99004745483398, 0.99007225036621)) as f32
+    }
+}
+
+/// 平均二乗から音圧（LUFS）へ。左右ぶんを足したものを渡す。
+pub fn lufs_of_mean(mean_l: f64, mean_r: f64) -> f32 {
+    let (ml, mr) = (mean_l.max(1e-20), mean_r.max(1e-20));
+    (-0.691 + 10.0 * (ml + mr).log10()) as f32
+}
+
 /// K 特性のフィルタを掛けたあとの実効値から求めた音圧（LUFS）。
 ///
-/// EBU R128 の簡易版。段付きハイシェルフと 38Hz ハイパスを掛けてから
-/// 実効値を取る。ゲート（無音区間を除く処理）は入れていない。
+/// ゲート（無音区間を除く処理）は入れていない。
 pub fn lufs(l: &[f32], r: &[f32]) -> f32 {
-    let k = |x: &[f32]| -> Vec<f32> {
-        // 1段目: 高域を持ち上げる棚（頭の当たりを人の耳に合わせる）
-        let mut y = Vec::with_capacity(x.len());
-        let (b0, b1, b2) = (1.53512485958697, -2.69169618940638, 1.19839281085285);
-        let (a1, a2) = (-1.69065929318241, 0.73248077421585);
-        let (mut x1, mut x2, mut y1, mut y2) = (0.0f64, 0.0, 0.0, 0.0);
-        for &v in x {
-            let x0 = v as f64;
-            let y0 = b0 * x0 + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
-            y.push(y0 as f32);
-            x2 = x1;
-            x1 = x0;
-            y2 = y1;
-            y1 = y0;
-        }
-        // 2段目: 低域を落とす（38Hz 以下は音圧として数えない）
-        let (b0, b1, b2) = (1.0, -2.0, 1.0);
-        let (a1, a2) = (-1.99004745483398, 0.99007225036621);
-        let (mut x1, mut x2, mut y1, mut y2) = (0.0f64, 0.0, 0.0, 0.0);
-        let mut z = Vec::with_capacity(y.len());
-        for &v in &y {
-            let x0 = v as f64;
-            let y0 = b0 * x0 + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
-            z.push(y0 as f32);
-            x2 = x1;
-            x1 = x0;
-            y2 = y1;
-            y1 = y0;
-        }
-        z
+    let mean = |x: &[f32]| -> f64 {
+        let mut k = KFilter::new();
+        let sum: f64 = x.iter().map(|v| (k.run(*v) as f64).powi(2)).sum();
+        sum / x.len().max(1) as f64
     };
-    let (kl, kr) = (k(l), k(r));
-    let ml = (kl.iter().map(|v| (*v as f64).powi(2)).sum::<f64>() / kl.len().max(1) as f64).max(1e-20);
-    let mr = (kr.iter().map(|v| (*v as f64).powi(2)).sum::<f64>() / kr.len().max(1) as f64).max(1e-20);
-    (-0.691 + 10.0 * (ml + mr).log10()) as f32
+    lufs_of_mean(mean(l), mean(r))
 }
 
 /// 目標の音圧へ合わせる。返り値は (掛けた倍率, 合わせる前の音圧)。

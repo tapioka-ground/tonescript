@@ -123,7 +123,7 @@ pub struct Voice {
 }
 
 /// パートごとのミックス設定。
-#[derive(Clone, Copy, Debug)]
+#[derive(PartialEq, Clone, Copy, Debug)]
 pub struct MixCfg {
     /// 左右の広がり。0 = 完全中央
     pub width: f32,

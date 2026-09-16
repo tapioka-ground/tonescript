@@ -321,6 +321,56 @@ fn a_loop_keeps_coming_back() {
 }
 
 #[test]
+fn the_meters_say_what_actually_came_out() {
+    let (s, sc) = song();
+    let (mut e, mut m) = Engine::new();
+    e.set_song(s, sc);
+    std::thread::sleep(Duration::from_millis(80));
+
+    // 止まっているあいだは振れない
+    let _ = e.meters().take_master();
+    pull(&mut m, 4, 1024, Duration::from_millis(2));
+    assert_eq!(e.meters().take_master(), (0.0, 0.0), "止まっているのに針が振れた");
+
+    e.play();
+    let (l, r) = pull(&mut m, 30, 1024, Duration::from_millis(4));
+    let (ml, mr) = e.meters().take_master();
+    // 針は「読むまでの一番大きかった所」。実際に出た音と合うこと
+    assert!((ml - peak(&l)).abs() < 1e-5, "左の針 {ml} / 実際 {}", peak(&l));
+    assert!((mr - peak(&r)).abs() < 1e-5, "右の針 {mr} / 実際 {}", peak(&r));
+    // 読んだら 0 に戻る
+    assert_eq!(e.meters().take_master(), (0.0, 0.0));
+
+    // パートごとの針も振れていること
+    let lead = e.plan().part_of("lead").expect("lead が無い");
+    pull(&mut m, 20, 1024, Duration::from_millis(4));
+    assert!(e.meters().take_part(lead) > 0.0, "パートの針が振れない");
+}
+
+#[test]
+fn the_loudness_meter_agrees_with_the_audio_it_measured() {
+    // 音圧計は 400ミリ秒の窓で今の音圧を出す。同じ音を書き出し側の物差しで
+    // 測ったものと合うこと。
+    //
+    // 曲ぜんぶの音圧（`MASTER_LUFS`）とは別物。あちらは終わりの余白まで
+    // 含めた平均なので、鳴っている最中の瞬時はそれより大きく出る
+    let (s, sc) = song();
+    let (mut e, mut m) = Engine::new();
+    e.set_song(s, sc);
+    std::thread::sleep(Duration::from_millis(400));
+    e.play();
+    let (l, r) = pull(&mut m, 60, 1024, Duration::from_millis(3));
+    let now = e.meters().lufs();
+
+    // 最後の 400ミリ秒を、書き出し側の lufs() で測る
+    let win = (0.400 * SR) as usize;
+    let from = l.len().saturating_sub(win);
+    let want = tonescript_render::mix::lufs(&l[from..], &r[from..]);
+    assert!((now - want).abs() < 1.0, "音圧計 {now:.2} / 同じ音を測ると {want:.2}");
+    assert!(now > -40.0, "鳴っているのに {now:.1} LUFS");
+}
+
+#[test]
 fn what_you_hear_is_what_gets_written() {
     // **この作りで一番大事な確かめ。**
     //

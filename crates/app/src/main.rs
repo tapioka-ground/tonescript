@@ -18,6 +18,7 @@ mod browser;
 mod edit;
 mod font;
 mod keys;
+mod mixer;
 mod newsong;
 mod play;
 mod settings;
@@ -118,6 +119,13 @@ struct App {
     ports: Vec<String>,
     ports_at: Option<std::time::Instant>,
 
+    /// ミキサーを開いているか
+    show_mixer: bool,
+    /// 針
+    needles: mixer::Needles,
+    /// 前のフレームの時刻。針の落ち方に使う
+    last_frame: Option<std::time::Instant>,
+
     log: Vec<String>,
     rx: Option<mpsc::Receiver<Msg>>,
     busy: bool,
@@ -165,6 +173,9 @@ impl Default for App {
             taking: std::collections::HashMap::new(),
             ports: Vec::new(),
             ports_at: None,
+            show_mixer: false,
+            needles: mixer::Needles::default(),
+            last_frame: None,
             log: Vec::new(),
             rx: None,
             busy: false,
@@ -476,6 +487,9 @@ impl App {
     fn push_to_engine(&mut self) {
         let (Some(song), Some(score)) = (self.song.clone(), self.score.clone()) else { return };
         self.engine.set_score(Arc::new(song), Arc::new(score));
+        // 手で触ったぶん（フェーダー・送り・ミュート）を重ねる。
+        // 書き出しと同じ重ね方にすること
+        self.engine.set_levels(&self.project.gains, &self.project.mix);
         self.engine.set_mutes(&self.project.muted, &self.project.soloed);
         self.engine.seek(self.sample_of(self.head));
         if let Some((a, b)) = self.loop_range {
@@ -610,6 +624,52 @@ impl App {
         }
     }
 
+    /// ミキサーで触られたぶんを当てる。取り消せる形で。
+    fn apply_mixer(&mut self, edits: Vec<mixer::Edit>) {
+        if edits.is_empty() {
+            return;
+        }
+        let mut audible = false;
+        for e in edits {
+            match e {
+                mixer::Edit::Gain { part, gain } => {
+                    // 摘まんでいるあいだは1段にまとめる。離すまで1回
+                    self.history.record(&self.project, Tag::Curve(part.clone(), "gain"));
+                    self.project.gains.insert(part.clone(), gain);
+                    self.engine.set_gain(&part, gain);
+                }
+                mixer::Edit::Mix { part, mix } => {
+                    self.history.record(&self.project, Tag::Curve(part.clone(), "mix"));
+                    self.project.mix.insert(part.clone(), mix);
+                    self.engine.set_mix(&part, mix.width, mix.reverb, mix.duck);
+                }
+                mixer::Edit::Mute(part) => {
+                    self.record(Tag::Once);
+                    if self.project.muted.iter().any(|m| *m == part) {
+                        self.project.muted.retain(|m| *m != part);
+                    } else {
+                        self.project.muted.push(part);
+                    }
+                    audible = true;
+                }
+                mixer::Edit::Solo(part) => {
+                    self.record(Tag::Once);
+                    if self.project.soloed.iter().any(|m| *m == part) {
+                        self.project.soloed.retain(|m| *m != part);
+                    } else {
+                        self.project.soloed.push(part);
+                    }
+                    audible = true;
+                }
+            }
+        }
+        if audible {
+            self.engine.set_mutes(&self.project.muted, &self.project.soloed);
+        }
+        // 音符は変わっていないので譜面は組み直さない。保存だけ促す
+        self.saver.touched();
+    }
+
     /// 鍵盤を繋ぐ・切る。
     fn toggle_midi(&mut self) {
         if self.midi.is_open() {
@@ -729,6 +789,9 @@ impl App {
             for (part, g) in &project.gains {
                 song.gains.insert(part.clone(), *g);
             }
+            for (part, m) in &project.mix {
+                song.mix.insert(part.clone(), *m);
+            }
             let score = match build(&song) {
                 Ok(mut sc) => {
                     project.overlay(&mut sc);
@@ -816,6 +879,17 @@ impl eframe::App for App {
         self.pump();
         self.pump_keys();
         self.tick_autosave();
+        // 針を進める。前のフレームからの時間で落とす
+        let now = std::time::Instant::now();
+        let dt = self.last_frame.map(|t| now.duration_since(t).as_secs_f32()).unwrap_or(0.016);
+        self.last_frame = Some(now);
+        if self.show_mixer {
+            let parts: Vec<String> =
+                self.song.as_ref().map(|s| s.edit_parts.clone()).unwrap_or_default();
+            self.needles.tick(&self.engine, &parts, dt.min(0.25));
+            // 針は動き続けるので、鳴っていなくても描き直す
+            ctx.request_repaint();
+        }
         if self.engine.is_playing() {
             self.head = self.sec_to_step(self.engine.seconds());
             ctx.request_repaint();
@@ -872,6 +946,7 @@ impl eframe::App for App {
         self.top_bar(ctx);
         self.side_bar(ctx);
         self.bottom_bar(ctx);
+        self.mixer_bar(ctx);
 
         egui::CentralPanel::default().show(ctx, |ui| {
             if let Some(e) = &self.error {
@@ -1493,6 +1568,13 @@ impl App {
                         self.scroll = 0.0;
                     }
                     ui.checkbox(&mut self.follow, "追う");
+                    if ui
+                        .selectable_label(self.show_mixer, "ミキサー")
+                        .on_hover_text("音量・広がり・残響の送りと、針")
+                        .clicked()
+                    {
+                        self.show_mixer = !self.show_mixer;
+                    }
                     ui.separator();
                     // 鍵盤
                     let on = self.midi.is_open();
@@ -1751,6 +1833,35 @@ impl App {
                 }
             }
         });
+    }
+
+    /// ミキサーの帯。記録の上に出す。
+    fn mixer_bar(&mut self, ctx: &egui::Context) {
+        if !self.show_mixer {
+            return;
+        }
+        let Some(song) = self.song.clone() else { return };
+        let mut edits = Vec::new();
+        egui::TopBottomPanel::bottom("mixer")
+            .resizable(true)
+            .default_height(232.0)
+            .show(ctx, |ui| {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label(theme::head("ミキサー"));
+                    ui.label(theme::dim("触ると鳴らしたまま変わる。書き出しにもそのまま効く"));
+                });
+                ui.add_space(2.0);
+                edits = mixer::panel(
+                    ui,
+                    &song,
+                    &self.project,
+                    &self.engine,
+                    &self.needles,
+                    &mut self.ed.part,
+                );
+            });
+        self.apply_mixer(edits);
     }
 
     fn bottom_bar(&mut self, ctx: &egui::Context) {

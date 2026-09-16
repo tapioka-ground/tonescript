@@ -25,7 +25,7 @@ pub mod store;
 
 pub use history::{History, Tag};
 
-use tonescript_song::model::{Curve, Lane, Note};
+use tonescript_song::model::{Curve, Lane, MixCfg, Note};
 use std::collections::HashMap;
 
 /// 保存の形式。読むときに、知らない世代のものを弾くために持つ。
@@ -45,6 +45,8 @@ pub struct Project {
     pub automation: HashMap<String, HashMap<Lane, Curve>>,
     /// パート -> 音量の倍率（線ではなく1つの値）
     pub gains: HashMap<String, f32>,
+    /// パート -> 広がり・残響の送り・ダッキング。曲ファイルの `MIX` を上書きする
+    pub mix: HashMap<String, MixCfg>,
     /// 黙らせているパート
     pub muted: Vec<String>,
     /// これだけ鳴らすパート。空なら全部鳴らす
@@ -99,6 +101,7 @@ impl Project {
         self.notes.is_empty()
             && self.automation.is_empty()
             && self.gains.is_empty()
+            && self.mix.is_empty()
             && self.muted.is_empty()
             && self.soloed.is_empty()
     }

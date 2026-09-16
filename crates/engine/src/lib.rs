@@ -29,6 +29,7 @@
 //! 音を作る所は書き出しと同じ [`tonescript_render::render_note`] を呼ぶ。
 //! **聞いた音と書き出した音が違う、を起こさないため。**
 
+pub mod meter;
 pub mod mixer;
 pub mod plan;
 pub mod ring;
@@ -43,6 +44,7 @@ use tonescript_dsp::osc::SR;
 use tonescript_render::Score;
 use tonescript_song::Song;
 
+pub use meter::Meters;
 pub use mixer::{Mixer, Shared};
 pub use plan::Plan;
 
@@ -57,6 +59,8 @@ pub struct Engine {
     live: Arc<AtomicU64>,
     /// 画面側が持つ設定の写し。触ったら丸ごと送り直す
     plan: Plan,
+    /// 針。音側が書いて画面が読む
+    meters: Arc<Meters>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -69,9 +73,17 @@ impl Engine {
         let (tx, rx) = ring::ring::<voice::Msg>(4096);
         let (gtx, grx) = ring::ring::<voice::Voice>(4096);
         let (cmd, cmd_rx) = channel::<Cmd>();
+        let meters = Arc::new(Meters::new(mixer::MAX_PARTS));
         let thread = sched::spawn(shared.clone(), tx, grx, cmd_rx, cmd.clone());
-        let mixer = Mixer::new(shared.clone(), rx, gtx, live.clone());
-        let me = Engine { shared, cmd, live, plan: Plan::empty(), thread: Some(thread) };
+        let mixer = Mixer::new(shared.clone(), rx, gtx, live.clone(), meters.clone());
+        let me = Engine {
+            shared,
+            cmd,
+            live,
+            plan: Plan::empty(),
+            meters,
+            thread: Some(thread),
+        };
         (me, mixer)
     }
 
@@ -236,6 +248,33 @@ impl Engine {
         }
     }
 
+    /// 手で触ったぶんの音量とミックスを、まとめて反映する。
+    ///
+    /// 1つずつ送ると、曲を開いた瞬間にパートの数だけ届いてしまう。
+    /// **1回にまとめる。**
+    pub fn set_levels(
+        &mut self,
+        gains: &std::collections::HashMap<String, f32>,
+        mix: &std::collections::HashMap<String, tonescript_song::model::MixCfg>,
+    ) {
+        if gains.is_empty() && mix.is_empty() {
+            return;
+        }
+        let mut plan = self.plan.clone();
+        for (name, g) in gains {
+            if let Some(i) = plan.part_of(name) {
+                plan.parts[i].gain = g.clamp(0.0, 8.0);
+            }
+        }
+        for (name, m) in mix {
+            if let Some(i) = plan.part_of(name) {
+                plan.parts[i].mix = *m;
+            }
+        }
+        self.plan = plan;
+        let _ = self.cmd.send(Cmd::Plan(Arc::new(self.plan.clone())));
+    }
+
     /// パートの左右の広がり・残響の送り・ダッキング。
     pub fn set_mix(&mut self, part: &str, width: f32, reverb: f32, duck: f32) {
         if let Some(i) = self.plan.part_of(part) {
@@ -255,6 +294,11 @@ impl Engine {
     /// 書き出しと同じ音圧で聞くための倍率。裏で測り終えるまでは 1.0。
     pub fn makeup(&self) -> f32 {
         self.shared.makeup()
+    }
+
+    /// 針。画面に出すため。
+    pub fn meters(&self) -> &Meters {
+        &self.meters
     }
 
     /// 今の設定の写し。画面に出すため。

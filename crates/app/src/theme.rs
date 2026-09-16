@@ -25,6 +25,10 @@ pub const DIM: Color32 = Color32::from_rgb(0x98, 0x98, 0x9f);
 pub const BLUE: Color32 = Color32::from_rgb(0x0a, 0x84, 0xff);
 pub const RED: Color32 = Color32::from_rgb(0xff, 0x45, 0x3a);
 pub const ORANGE: Color32 = Color32::from_rgb(0xff, 0x9f, 0x0a);
+/// 針が振れているところ
+pub const GREEN: Color32 = Color32::from_rgb(0x30, 0xd1, 0x58);
+/// 針の下地
+pub const PANEL: Color32 = Color32::from_rgb(0x18, 0x18, 0x1a);
 
 // -- 再生ヘッド。鳴っているあいだは白くして目立たせる
 pub const HEAD_ON: Color32 = Color32::from_rgb(0xff, 0xff, 0xff);

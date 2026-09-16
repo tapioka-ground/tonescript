@@ -165,7 +165,8 @@ struct Lanes {
 }
 
 const MAX_BLOCK: usize = 8192;
-const MAX_PARTS: usize = 64;
+/// パートの上限。針の数もこれに合わせる
+pub const MAX_PARTS: usize = 64;
 const MAX_VOICES: usize = 1024;
 
 /// 音を出す側。cpal の中へ丸ごと渡す。
@@ -196,6 +197,10 @@ pub struct Mixer {
     trim: Vec<Option<(f32, f32)>>,
     /// いま鳴っている音の数（画面に出す）
     live: Arc<AtomicU64>,
+    /// 針
+    meters: Arc<crate::meter::Meters>,
+    /// 音圧計
+    loudness: crate::meter::Loudness,
 }
 
 impl Mixer {
@@ -204,6 +209,7 @@ impl Mixer {
         rx: Rx<Msg>,
         gc: Tx<Voice>,
         live: Arc<AtomicU64>,
+        meters: Arc<crate::meter::Meters>,
     ) -> Self {
         let plan = Arc::new(Plan::empty());
         let mut duck = Duck::default();
@@ -227,6 +233,8 @@ impl Mixer {
             clock: 0,
             trim: Vec::new(),
             live,
+            meters,
+            loudness: crate::meter::Loudness::new(),
         }
     }
 
@@ -403,6 +411,7 @@ impl Mixer {
             let s = (width * 0.5).max(0.0);
             let wide = 1.0 / (1.0 + s * s).sqrt();
             let gain = part.gain;
+            let mut loudest = 0.0f32;
             for i in 0..n {
                 let t = i as f32 / n as f32;
                 let g = a.gain + (b.gain - a.gain) * t;
@@ -436,7 +445,12 @@ impl Mixer {
                 }
                 out_l[i] += l * gain;
                 out_r[i] += r * gain;
+                let seen = (l * gain).abs().max((r * gain).abs());
+                if seen > loudest {
+                    loudest = seen;
+                }
             }
+            self.meters.hit_part(pi, loudest);
         }
         // 次のブロックの「前の値」は、今のブロックの終わりの値
         from[..np].copy_from_slice(&now[..np]);
@@ -460,10 +474,14 @@ impl Mixer {
 
         // 音圧と天井
         let g = plan.master_gain * self.shared.makeup();
+        let (mut pl, mut pr) = (0.0f32, 0.0f32);
         for i in 0..n {
             out_l[i] = ceiling(out_l[i] * g);
             out_r[i] = ceiling(out_r[i] * g);
+            pl = pl.max(out_l[i].abs());
+            pr = pr.max(out_r[i].abs());
         }
+        self.meters.hit_master(pl, pr);
     }
 
     /// 音の出口から呼ばれる。左右そろえて `n` サンプル埋める。
@@ -476,6 +494,7 @@ impl Mixer {
             let pos = self.shared.pos.load(Ordering::Relaxed);
             self.block(pos, n, false, &mut out_l[..n], &mut out_r[..n]);
             self.tick(n);
+            self.measure_loudness(&out_l[..n], &out_r[..n]);
             self.retire();
             return;
         }
@@ -508,7 +527,14 @@ impl Mixer {
         }
         self.shared.pos.store(pos, Ordering::Relaxed);
         self.tick(n);
+        self.measure_loudness(&out_l[..n], &out_r[..n]);
         self.retire();
+    }
+
+    /// 今の音圧を測る。400ミリ秒の窓で、書き出しと同じ物差し。
+    fn measure_loudness(&mut self, l: &[f32], r: &[f32]) {
+        let v = self.loudness.push(l, r);
+        self.meters.set_lufs(v);
     }
 
     /// 止まらない時計を進める。
@@ -525,6 +551,7 @@ impl Mixer {
         self.duck.clear();
         self.reverb.clear();
         self.rv_left = 0;
+        self.loudness.clear();
         self.cursor.reset();
         self.have_prev = false;
     }
@@ -570,7 +597,8 @@ mod tests {
         let (tx, rx) = ring::<Msg>(256);
         let (gtx, grx) = ring::<Voice>(256);
         let live = Arc::new(AtomicU64::new(0));
-        (Mixer::new(shared.clone(), rx, gtx, live), tx, grx, shared)
+        let meters = Arc::new(crate::meter::Meters::new(MAX_PARTS));
+        (Mixer::new(shared.clone(), rx, gtx, live, meters), tx, grx, shared)
     }
 
     fn plan_with(total: u64, parts: usize) -> Arc<Plan> {

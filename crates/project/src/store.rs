@@ -16,7 +16,7 @@
 
 use crate::json::{self, Value};
 use crate::{Project, FORMAT};
-use tonescript_song::model::{Curve, Lane, Note};
+use tonescript_song::model::{Curve, Lane, MixCfg, Note};
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -220,6 +220,16 @@ fn encode(p: &Project) -> Value {
         gains.insert(part, (*g).into());
     }
     root.insert("gains", gains);
+
+    let mut mix = Value::obj();
+    for (part, m) in &p.mix {
+        let mut one = Value::obj();
+        one.insert("width", m.width.into());
+        one.insert("reverb", m.reverb.into());
+        one.insert("duck", m.duck.into());
+        mix.insert(part, one);
+    }
+    root.insert("mix", mix);
     root.insert("muted", Value::Arr(p.muted.iter().map(|s| s.as_str().into()).collect()));
     root.insert("soloed", Value::Arr(p.soloed.iter().map(|s| s.as_str().into()).collect()));
     root
@@ -291,6 +301,21 @@ fn decode(v: &Value) -> Result<Project, String> {
             if let Some(g) = g.as_f64() {
                 p.gains.insert(part.clone(), (g as f32).clamp(0.0, 8.0));
             }
+        }
+    }
+    if let Some(m) = v.get("mix").and_then(|x| x.as_obj()) {
+        for (part, one) in m {
+            let num = |k: &str, lo: f32, hi: f32, dflt: f32| -> f32 {
+                one.get(k).and_then(|x| x.as_f64()).map(|v| (v as f32).clamp(lo, hi)).unwrap_or(dflt)
+            };
+            p.mix.insert(
+                part.clone(),
+                MixCfg {
+                    width: num("width", 0.0, 4.0, 0.0),
+                    reverb: num("reverb", 0.0, 2.0, 0.0),
+                    duck: num("duck", 0.0, 2.0, 0.0),
+                },
+            );
         }
     }
     let names = |k: &str| -> Vec<String> {
@@ -394,8 +419,40 @@ mod tests {
             HashMap::from([(Lane::Gain, Curve::new(vec![(0, 1.0), (32, 0.25)]))]),
         );
         p.gains.insert("bass".into(), 0.8);
+        p.mix.insert("lead".into(), MixCfg { width: 1.35, reverb: 0.26, duck: 0.55 });
         p.muted.push("perc".into());
         p
+    }
+
+    #[test]
+    fn the_mixer_settings_survive_a_save() {
+        let d = tmpdir("mix");
+        let s = Store::new(&d, "example");
+        let mut p = sample();
+        p.mix.insert("bass".into(), MixCfg { width: 0.0, reverb: 0.02, duck: 1.0 });
+        s.save(&p).unwrap();
+        let back = s.load().unwrap().expect("あるはず");
+        assert_eq!(back.mix.len(), 2);
+        let lead = back.mix["lead"];
+        assert!((lead.width - 1.35).abs() < 1e-6, "広がりが {}", lead.width);
+        assert!((lead.reverb - 0.26).abs() < 1e-6);
+        assert!((lead.duck - 0.55).abs() < 1e-6);
+        assert_eq!(back.mix["bass"].width, 0.0);
+        assert_eq!(back, p);
+    }
+
+    #[test]
+    fn an_out_of_range_mix_is_pulled_back_not_trusted() {
+        let d = tmpdir("mixbad");
+        let s = Store::new(&d, "example");
+        let mut p = Project::new("example");
+        p.mix.insert("lead".into(), MixCfg { width: 99.0, reverb: -5.0, duck: 50.0 });
+        s.save(&p).unwrap();
+        let back = s.load().unwrap().unwrap();
+        let m = back.mix["lead"];
+        assert_eq!(m.width, 4.0, "広がりが範囲外のまま");
+        assert_eq!(m.reverb, 0.0);
+        assert_eq!(m.duck, 2.0);
     }
 
     #[test]
