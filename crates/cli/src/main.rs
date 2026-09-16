@@ -7,7 +7,7 @@
 //!
 //! 曲は songs/<名前>.rhai。書き出し先は TONESCRIPT_ROOT（既定は ./out）。
 
-use tonescript_render::{mix, render_song_at, wav};
+use tonescript_render::{export, mix, render_song_at, wav};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -58,7 +58,7 @@ fn main() {
         Some("list") => cmd_list(),
         Some("patches") => cmd_patches(),
         Some("check") => cmd_check(args.get(1)),
-        Some("render") => cmd_render(args.get(1)),
+        Some("render") => cmd_render(args.get(1), &args[1..]),
         Some("project") => cmd_project(args.get(1)),
         Some("midi-out") => cmd_midi_out(args.get(1), args.get(2)),
         Some("midi-in") => cmd_midi_in(args.get(1), args.get(2)),
@@ -81,6 +81,9 @@ fn usage() {
     println!("  tonescript list           曲の一覧");
     println!("  tonescript check  <曲>    曲ファイルを読めるか確かめる");
     println!("  tonescript render <曲>    音にして WAV へ書き出す");
+    println!("      --rate 44100|48000|96000   周波数（既定 48000）");
+    println!("      --depth 16|24|32           深さ（既定 16。32 は小数）");
+    println!("      --no-dither                16bit の丸めの粉を足さない");
     println!("  tonescript patches        使える音色の一覧");
     println!("  tonescript project <曲>   保存の状態（世代・自動保存）を見る");
     println!("  tonescript midi-out <曲> [書き出し先]   MIDI へ持ち出す");
@@ -144,10 +147,54 @@ fn cmd_check(name: Option<&String>) -> i32 {
     }
 }
 
-fn cmd_render(name: Option<&String>) -> i32 {
+/// 書き出しの形を、渡された言葉から読む。
+///
+/// `--rate 44100` `--depth 24` `--no-dither`。書かなければ 48kHz / 16bit。
+fn read_format(args: &[String]) -> Result<export::Format, String> {
+    let mut fmt = export::Format::default();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--rate" => {
+                let v = args.get(i + 1).ok_or("--rate のあとに周波数を書いてください")?;
+                fmt.rate = match v.as_str() {
+                    "44100" | "44.1" => export::Rate::R44100,
+                    "48000" | "48" => export::Rate::R48000,
+                    "96000" | "96" => export::Rate::R96000,
+                    _ => return Err(format!("{v} Hz は選べません（44100 / 48000 / 96000）")),
+                };
+                i += 1;
+            }
+            "--depth" => {
+                let v = args.get(i + 1).ok_or("--depth のあとに深さを書いてください")?;
+                fmt.depth = match v.as_str() {
+                    "16" => export::Depth::I16,
+                    "24" => export::Depth::I24,
+                    "32" | "float" => export::Depth::F32,
+                    _ => return Err(format!("{v} bit は選べません（16 / 24 / 32）")),
+                };
+                i += 1;
+            }
+            "--no-dither" => fmt.dither = false,
+            a if a.starts_with("--") => return Err(format!("{a} は知りません")),
+            _ => {}
+        }
+        i += 1;
+    }
+    Ok(fmt)
+}
+
+fn cmd_render(name: Option<&String>, args: &[String]) -> i32 {
     let Some(name) = name else {
         eprintln!("[!] 曲の名前を指定してください");
         return 2;
+    };
+    let fmt = match read_format(args) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("[!] {e}");
+            return 2;
+        }
     };
     let song = match load(name) {
         Ok(s) => s,
@@ -168,7 +215,11 @@ fn cmd_render(name: Option<&String>) -> i32 {
     };
     let dir = out_dir().join(name);
     let full = dir.join("full.wav");
-    if let Err(e) = wav::write_stereo(&full, &out, 48_000) {
+    // 形を整えてから書く。48kHz のままなら何もしない
+    let shaped = export::shape(&out, 48_000, fmt);
+    if let Err(e) =
+        wav::write_stereo_as(&full, &shaped, fmt.rate.hz(), fmt.depth, fmt.dither)
+    {
         eprintln!("[!] 書き出せません: {e}");
         return 1;
     }
@@ -180,7 +231,13 @@ fn cmd_render(name: Option<&String>) -> i32 {
     }
     let secs = out.len() as f32 / 48_000.0;
     let took = t.elapsed().as_secs_f32();
-    println!("  -> {}", full.display());
+    println!(
+        "  -> {}  （{} / {}{}）",
+        full.display(),
+        fmt.rate.label(),
+        fmt.depth.label(),
+        if fmt.dither && fmt.depth == export::Depth::I16 { " / 丸めの粉あり" } else { "" }
+    );
     println!("  -> パート別 {}", dir.join("parts").display());
     println!(
         "  {:.1}秒の曲を {:.2}秒で作った（実時間の {:.0}倍速） / 音圧 {:.1} LUFS",

@@ -10,6 +10,7 @@
 //! Python には GIL があってここが取れなかった。
 
 pub mod arrange;
+pub mod export;
 pub mod mix;
 pub mod wav;
 

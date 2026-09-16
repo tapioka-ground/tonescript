@@ -129,6 +129,10 @@ struct App {
     last_frame: Option<std::time::Instant>,
     /// 写したもの
     clip: sel::Clip,
+    /// 書き出しの形
+    fmt: tonescript_render::export::Format,
+    /// 繰り返す範囲だけ書き出すか
+    export_loop: bool,
     /// 録っている最中。開いていれば Some
     taking_audio: Option<rec::Rec>,
     /// 入力の針
@@ -192,6 +196,8 @@ impl Default for App {
             needles: mixer::Needles::default(),
             last_frame: None,
             clip: sel::Clip::default(),
+            fmt: tonescript_render::export::Format::default(),
+            export_loop: false,
             taking_audio: None,
             count_in: 4,
             tap: settings::Tap::default(),
@@ -1153,6 +1159,13 @@ impl App {
         // 手で触ったぶんを重ねたものを書き出す。聞いたバランスがそのまま出る
         let (Some(song), Some(name)) = (self.merged_song(), self.picked.clone()) else { return };
         let project = self.project.clone();
+        let fmt = self.fmt;
+        // 繰り返す範囲だけ書き出す。直した所だけ聞き直すときに使う
+        let range = self
+            .export_loop
+            .then(|| self.loop_range)
+            .flatten()
+            .map(|(a, b)| (self.sample_of(a) as usize, self.sample_of(b) as usize));
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         self.busy = true;
@@ -1203,7 +1216,28 @@ impl App {
 
             let dir = out_dir().join(&name);
             let full = dir.join("full.wav");
-            if let Err(e) = wav::write_stereo(&full, &out, 48_000) {
+            // 範囲を切って、形を整えてから書く
+            let mut out = match range {
+                Some((a, b)) => {
+                    let _ = tx.send(Msg::Line(format!(
+                        "[書き出し] 繰り返す範囲だけ（{:.1}秒〜{:.1}秒）",
+                        a as f32 / 48_000.0,
+                        b as f32 / 48_000.0
+                    )));
+                    tonescript_render::export::cut(&out, a, b)
+                }
+                None => out,
+            };
+            if fmt.rate.hz() != 48_000 {
+                let _ = tx.send(Msg::Line(format!(
+                    "[書き出し] {} へ合わせる",
+                    fmt.rate.label()
+                )));
+                out = tonescript_render::export::shape(&out, 48_000, fmt);
+            }
+            if let Err(e) =
+                wav::write_stereo_as(&full, &out, fmt.rate.hz(), fmt.depth, fmt.dither)
+            {
                 let _ = tx.send(Msg::Failed(format!("書き出せません: {e}")));
                 return;
             }
@@ -1211,7 +1245,7 @@ impl App {
                 let _ = wav::write_mono(&dir.join("parts").join(format!("{part}.wav")), buf, 48_000);
             }
             let _ = tx.send(Msg::Done {
-                secs: out.len() as f32 / 48_000.0,
+                secs: out.len() as f32 / fmt.rate.hz() as f32,
                 took: t.elapsed().as_secs_f32(),
                 lufs: tonescript_render::mix::lufs(&out.l, &out.r),
                 path: full.display().to_string(),
@@ -1928,13 +1962,74 @@ impl App {
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let label = if self.busy { "書き出し中…" } else { "書き出す" };
-                    let _ = label;
                     if ui
                         .add_enabled(!self.busy && self.song.is_some(), egui::Button::new(label))
+                        .on_hover_text(format!(
+                            "{} / {}{}",
+                            self.fmt.rate.label(),
+                            self.fmt.depth.label(),
+                            if self.export_loop { " / 繰り返す範囲だけ" } else { "" }
+                        ))
                         .clicked()
                     {
                         self.start_render();
                     }
+                    // 書き出しの形
+                    ui.menu_button("形", |ui| {
+                        use tonescript_render::export::{Depth, Rate};
+                        ui.label(theme::head("周波数"));
+                        for r in Rate::ALL {
+                            let tip = match r {
+                                Rate::R44100 => "CD と同じ。48kHz のまま渡すと 8.8% 速く鳴る",
+                                Rate::R48000 => "中で作っているのと同じ。変換なし",
+                                Rate::R96000 => "中身は増えない。相手の決まりで要るときだけ",
+                            };
+                            if ui
+                                .selectable_label(self.fmt.rate == r, r.label())
+                                .on_hover_text(tip)
+                                .clicked()
+                            {
+                                self.fmt.rate = r;
+                            }
+                        }
+                        ui.separator();
+                        ui.label(theme::head("深さ"));
+                        for d in Depth::ALL {
+                            let tip = match d {
+                                Depth::I16 => "配信も CD もこれ",
+                                Depth::I24 => "作業の受け渡し用",
+                                Depth::F32 => "小数のまま。天井を超えたぶんも残る",
+                            };
+                            if ui
+                                .selectable_label(self.fmt.depth == d, d.label())
+                                .on_hover_text(tip)
+                                .clicked()
+                            {
+                                self.fmt.depth = d;
+                            }
+                        }
+                        if self.fmt.depth == Depth::I16 {
+                            ui.separator();
+                            ui.checkbox(&mut self.fmt.dither, "丸めの粉")
+                                .on_hover_text(
+                                    "16bit へ落とすときの段を、微かな雑音でばらけさせる。
+                                     ジリジリした歪みが、小さな雑音になる",
+                                );
+                        }
+                        ui.separator();
+                        let has_loop = self.loop_range.is_some();
+                        ui.add_enabled(
+                            has_loop,
+                            egui::Checkbox::new(&mut self.export_loop, "繰り返す範囲だけ"),
+                        )
+                        .on_hover_text(if has_loop {
+                            "直した所だけ聞き直すときに"
+                        } else {
+                            "先に物差しを Shift+ドラッグして範囲を作る"
+                        });
+                    })
+                    .response
+                    .on_hover_text("周波数・深さ・範囲");
                     if ui.button("保存 (Ctrl+S)").clicked() {
                         self.save();
                     }

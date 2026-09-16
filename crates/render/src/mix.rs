@@ -13,6 +13,7 @@ use tonescript_dsp::osc::SR;
 use tonescript_dsp::{peak, rms};
 
 /// 左右2本。
+#[derive(Clone, Debug, Default)]
 pub struct Stereo {
     pub l: Vec<f32>,
     pub r: Vec<f32>,
