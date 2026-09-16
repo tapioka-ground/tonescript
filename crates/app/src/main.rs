@@ -935,6 +935,48 @@ impl App {
         self.touched();
     }
 
+    /// 選んでいるものの強さを、今の平均へ揃える。
+    fn flatten_sel(&mut self) {
+        if self.ed.sel.len() < 2 {
+            self.status = "2つ以上選んでください".into();
+            return;
+        }
+        let picked = self.ed.sel.clone();
+        let part = self.ed.part.clone();
+        let Some(avg) = self.project.notes.get(&part).and_then(|ns| sel::mean_vel(ns, &picked))
+        else {
+            return;
+        };
+        self.record(Tag::Once);
+        let done = match self.notes_for_edit() {
+            Some(ns) => sel::flatten(ns, &picked, avg),
+            None => false,
+        };
+        if done {
+            self.status = format!("強さを {avg} に揃えました");
+            self.touched();
+        }
+    }
+
+    /// 選んでいるものの強さを傾ける。
+    fn ramp_sel(&mut self, up: bool) {
+        if self.ed.sel.len() < 2 {
+            self.status = "2つ以上選んでください".into();
+            return;
+        }
+        let picked = self.ed.sel.clone();
+        let (a, b) = if up { (60, 120) } else { (120, 60) };
+        self.record(Tag::Once);
+        let done = match self.notes_for_edit() {
+            Some(ns) => sel::ramp(ns, &picked, a, b),
+            None => false,
+        };
+        if done {
+            self.status = format!("強さを {a} から {b} へ傾けました");
+            self.touched();
+        }
+    }
+
     /// 選んでいるものをまとめて動かす。
     fn nudge_sel(&mut self, dstep: i32, dpitch: i32) {
         if self.ed.sel.is_empty() {
@@ -1931,6 +1973,13 @@ impl App {
                     }
                     ui.checkbox(&mut self.follow, "追う");
                     if ui
+                        .selectable_label(self.ed.show_vel, "強さ")
+                        .on_hover_text("下に強さのレーンを出す。押した高さがそのまま強さ")
+                        .clicked()
+                    {
+                        self.ed.show_vel = !self.ed.show_vel;
+                    }
+                    if ui
                         .selectable_label(self.show_mixer, "ミキサー")
                         .on_hover_text("音量・広がり・残響の送りと、針")
                         .clicked()
@@ -2237,6 +2286,22 @@ impl App {
             });
             ui.label(theme::dim("← → で動かす / ↑ ↓ で音程"))
                 .on_hover_text("↑↓ は半音ずつ。Shift を足すと1オクターブ");
+            ui.horizontal_wrapped(|ui| {
+                ui.label(theme::dim("強さ"));
+                if ui
+                    .small_button("揃える")
+                    .on_hover_text("選んだものを、今の平均に揃える")
+                    .clicked()
+                {
+                    self.flatten_sel();
+                }
+                if ui.small_button("↗").on_hover_text("だんだん強く").clicked() {
+                    self.ramp_sel(true);
+                }
+                if ui.small_button("↘").on_hover_text("だんだん弱く").clicked() {
+                    self.ramp_sel(false);
+                }
+            });
 
             ui.add_space(10.0);
             ui.separator();

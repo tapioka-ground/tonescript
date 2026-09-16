@@ -2,7 +2,8 @@
 
 A DAW whose project file is text. 46 instruments, zero samples. Free, MIT.
 
-Piano roll, mixer with meters, automation, undo, autosave, MIDI files in and out.
+Piano roll with a velocity lane, mixer with meters, automation, undo,
+autosave, MIDI files in and out.
 Plug in a MIDI keyboard and play it. Record audio through a mic,
 with a metronome and a count-in.
 Notes sound the moment you place them — a real-time engine, not a re-render.
@@ -106,7 +107,7 @@ interpolation above, which is the improvement.
 The 21× on `highpass` is where Python's cleverness disappeared: an FFT
 convolution became a three-line loop.
 
-378 tests.
+387 tests.
 
 ## Not ported
 
@@ -125,7 +126,8 @@ make with it, nor any samples or voice banks you supply.
 
 プロジェクトファイルがテキストの DAW。楽器46種、音源ゼロ。無料・MIT。
 
-ピアノロール、針付きミキサー、オートメーション、取り消し、自動保存、MIDI の読み書き。
+ピアノロール（強さのレーン付き）、針付きミキサー、オートメーション、
+取り消し、自動保存、MIDI の読み書き。
 MIDI 鍵盤を挿せば弾ける。マイクから歌も録れる（メトロノームとカウントイン付き）。
 置いた音はその場で鳴る。作り直して鳴らすのではなく、鳴らしながら作っている。
 
@@ -225,7 +227,7 @@ AI に書かせるなら「SONGFILE.ja.md に従って songs/x.rhai を書いて
 `highpass` の21倍が「Python の賢さが消えた」ところ。FFT 畳み込みが
 3行のループになった。
 
-テスト 378 件。
+テスト 387 件。
 
 ## 移植しなかったもの
 

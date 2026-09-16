@@ -105,6 +105,100 @@ pub fn nudge(notes: &mut [Note], sel: &[usize], dstep: i32, dpitch: i32, total: 
     true
 }
 
+/// 強さを変える。
+///
+/// 掴んだものが**選んでいるものの1つなら、選んだぶん全部を同じだけ**動かす。
+/// 1本だけ動かすと、和音の中の1音だけが浮く。
+///
+/// 返り値は変わったかどうか。
+pub fn set_vel(notes: &mut [Note], index: usize, want: u8, sel: &[usize]) -> bool {
+    let Some(now) = notes.get(index) else { return false };
+    let want = want.clamp(1, 127);
+    if now.vel == want {
+        return false;
+    }
+    let delta = want as i32 - now.vel as i32;
+    if sel.contains(&index) && sel.len() > 1 {
+        for i in sel {
+            if let Some(n) = notes.get_mut(*i) {
+                n.vel = (n.vel as i32 + delta).clamp(1, 127) as u8;
+            }
+        }
+    } else if let Some(n) = notes.get_mut(index) {
+        n.vel = want;
+    }
+    true
+}
+
+/// 選んでいるものの強さを揃える。
+///
+/// 打ち込んだままだと全部 100 で平らに聞こえる。まず揃えてから、
+/// 傾ける・数本だけ持ち上げる、という順で触ることが多い。
+pub fn flatten(notes: &mut [Note], sel: &[usize], vel: u8) -> bool {
+    let vel = vel.clamp(1, 127);
+    let mut changed = false;
+    for i in sel {
+        if let Some(n) = notes.get_mut(*i) {
+            changed |= n.vel != vel;
+            n.vel = vel;
+        }
+    }
+    changed
+}
+
+/// 選んでいるものを、位置の順に `from` から `to` へ傾ける。
+///
+/// **音符の並び順ではなく、目盛りの位置で決める。** 並び順で傾けると、
+/// 後から足した音符が飛び飛びに強くなる。
+pub fn ramp(notes: &mut [Note], sel: &[usize], from: u8, to: u8) -> bool {
+    if sel.len() < 2 {
+        return false;
+    }
+    let mut ps: Vec<(usize, u32)> =
+        sel.iter().filter_map(|i| notes.get(*i).map(|n| (*i, n.pos))).collect();
+    if ps.len() < 2 {
+        return false;
+    }
+    ps.sort_by_key(|(_, p)| *p);
+    let (first, last) = (ps[0].1 as f32, ps[ps.len() - 1].1 as f32);
+    let span = (last - first).max(1.0);
+    let (a, b) = (from.clamp(1, 127) as f32, to.clamp(1, 127) as f32);
+    let mut changed = false;
+    for (i, pos) in ps {
+        let t = (pos as f32 - first) / span;
+        let v = (a + (b - a) * t).round().clamp(1.0, 127.0) as u8;
+        if let Some(n) = notes.get_mut(i) {
+            changed |= n.vel != v;
+            n.vel = v;
+        }
+    }
+    changed
+}
+
+/// 選んでいるものの強さの平均。揃えるときの目安に使う。
+pub fn mean_vel(notes: &[Note], sel: &[usize]) -> Option<u8> {
+    let vs: Vec<u16> = sel.iter().filter_map(|i| notes.get(*i)).map(|n| n.vel as u16).collect();
+    if vs.is_empty() {
+        return None;
+    }
+    Some((vs.iter().sum::<u16>() / vs.len() as u16) as u8)
+}
+
+/// その目盛りの所にある音符。強さのレーンで掴むのに使う。
+///
+/// 重なっていたら**上の音**を採る（見えているものが掴める）。
+pub fn at_step(notes: &[Note], step: f32) -> Option<usize> {
+    let mut best: Option<(usize, i32)> = None;
+    for (i, n) in notes.iter().enumerate() {
+        if (n.pos as f32) <= step && step < (n.pos + n.len.max(1)) as f32 {
+            if best.is_none_or(|(_, p)| n.pitch > p) {
+                best = Some((i, n.pitch));
+            }
+        }
+    }
+    best.map(|(i, _)| i)
+}
+
 /// 選んでいるものを消す。消したあとの並びを返す。
 pub fn remove(notes: &[Note], sel: &[usize]) -> Vec<Note> {
     notes
@@ -237,6 +331,92 @@ mod tests {
         let before = ns.clone();
         assert!(!nudge(&mut ns, &[3], 100, 0, 64), "曲の外へ出た");
         assert_eq!(ns, before);
+    }
+
+    #[test]
+    fn changing_one_velocity_leaves_the_others_alone() {
+        let mut ns = sample();
+        assert!(set_vel(&mut ns, 1, 60, &[]));
+        assert_eq!(ns[1].vel, 60);
+        assert_eq!(ns[0].vel, 100, "他の音まで変わった");
+        // 同じ値なら何もしない
+        assert!(!set_vel(&mut ns, 1, 60, &[]));
+    }
+
+    #[test]
+    fn changing_a_selected_velocity_moves_them_all_by_the_same_amount() {
+        // 和音の中の1音だけが浮かないこと
+        let mut ns = vec![n(0, 4, 60), n(0, 4, 64), n(0, 4, 67)];
+        ns[1].vel = 80;
+        ns[2].vel = 120;
+        assert!(set_vel(&mut ns, 0, 110, &[0, 1, 2]));
+        assert_eq!(ns[0].vel, 110);
+        assert_eq!(ns[1].vel, 90, "同じ差だけ動いていない");
+        assert_eq!(ns[2].vel, 127, "上限で止まっていない");
+    }
+
+    #[test]
+    fn velocity_stays_inside_one_to_one_twenty_seven() {
+        let mut ns = sample();
+        set_vel(&mut ns, 0, 0, &[]);
+        assert_eq!(ns[0].vel, 1, "0 になった（鳴らない音符ができる）");
+        set_vel(&mut ns, 0, 200, &[]);
+        assert_eq!(ns[0].vel, 127);
+    }
+
+    #[test]
+    fn flattening_makes_them_all_the_same() {
+        let mut ns = sample();
+        ns[0].vel = 40;
+        ns[1].vel = 120;
+        assert!(flatten(&mut ns, &[0, 1], 90));
+        assert_eq!(ns[0].vel, 90);
+        assert_eq!(ns[1].vel, 90);
+        assert_eq!(ns[2].vel, 100, "選んでいないものが変わった");
+        // もう一度やっても変わらない
+        assert!(!flatten(&mut ns, &[0, 1], 90));
+    }
+
+    #[test]
+    fn a_ramp_follows_the_positions_not_the_order() {
+        // 後から足した音符が飛び飛びに強くならないこと
+        let mut ns = vec![n(16, 4, 60), n(0, 4, 62), n(8, 4, 64)];
+        assert!(ramp(&mut ns, &[0, 1, 2], 40, 120));
+        assert_eq!(ns[1].vel, 40, "いちばん前が始まりの値になっていない");
+        assert_eq!(ns[2].vel, 80, "真ん中が半分になっていない");
+        assert_eq!(ns[0].vel, 120, "いちばん後ろが終わりの値になっていない");
+    }
+
+    #[test]
+    fn a_ramp_can_go_down_too() {
+        let mut ns = sample();
+        ramp(&mut ns, &[0, 1, 2, 3], 120, 40);
+        assert_eq!(ns[0].vel, 120);
+        assert!(ns[3].vel < ns[0].vel, "下がっていない");
+    }
+
+    #[test]
+    fn one_note_cannot_be_ramped() {
+        let mut ns = sample();
+        assert!(!ramp(&mut ns, &[0], 40, 120), "1本で傾けた");
+        assert_eq!(ns[0].vel, 100);
+    }
+
+    #[test]
+    fn the_average_is_what_flattening_starts_from() {
+        let mut ns = sample();
+        ns[0].vel = 60;
+        ns[1].vel = 100;
+        assert_eq!(mean_vel(&ns, &[0, 1]), Some(80));
+        assert_eq!(mean_vel(&ns, &[]), None);
+    }
+
+    #[test]
+    fn the_top_note_is_the_one_you_grab() {
+        // 重なっていたら、見えている上の音が掴める
+        let ns = vec![n(0, 8, 60), n(0, 8, 72), n(0, 8, 64)];
+        assert_eq!(at_step(&ns, 3.0), Some(1));
+        assert_eq!(at_step(&ns, 9.0), None, "音符の無い所で掴めた");
     }
 
     #[test]

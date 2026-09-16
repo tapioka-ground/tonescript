@@ -68,6 +68,10 @@ pub struct Editor {
     pub sel: Vec<usize>,
     /// 囲んでいる最中の反対の角
     pub box_to: Option<(f32, i32)>,
+    /// 下に強さのレーンを出すか
+    pub show_vel: bool,
+    /// 強さのレーンを引きずっている最中か
+    pub vel_drag: bool,
     /// 譜面の見えている幅（ピクセル）。ボタンが拡大率を出すのに使う
     pub view_w: f32,
     /// 物差しを引きずっている最中か
@@ -85,6 +89,8 @@ impl Default for Editor {
             grab: Grab::None,
             sel: Vec::new(),
             box_to: None,
+            show_vel: true,
+            vel_drag: false,
             view_w: 800.0,
             scrubbing: false,
             loop_from: None,
@@ -217,7 +223,11 @@ pub fn piano_roll(
     p.rect_filled(whole, 0.0, theme::BASE);
     // 上を物差しに使い、その下を譜面にする
     let ruler = Rect::from_min_max(whole.min, Pos2::new(whole.max.x, whole.min.y + RULER_H));
-    let rect = Rect::from_min_max(Pos2::new(whole.min.x, ruler.max.y), whole.max);
+    // 下に強さのレーン。狭い窓では出さない（譜面が潰れる）
+    let lane_h = if ed.show_vel && whole.height() > RULER_H + VEL_H + 80.0 { VEL_H } else { 0.0 };
+    let lane = Rect::from_min_max(Pos2::new(whole.min.x, whole.max.y - lane_h), whole.max);
+    let rect = Rect::from_min_max(Pos2::new(whole.min.x, ruler.max.y), 
+        Pos2::new(whole.max.x, whole.max.y - lane_h));
 
     // 音程の範囲。手で置いたぶんも含める
     let (mut lo, mut hi) = (127i32, 0i32);
@@ -253,11 +263,17 @@ pub fn piano_roll(
     draw_ruler(&p, song, &view, &ruler);
     draw_head(&p, tr, &view, &ruler);
     draw_box(&p, ed, &view);
+    if lane_h > 0.0 {
+        draw_vel(&p, project, score, ed, &view, &lane);
+    }
 
     // ---- 触り
     let pointer = resp.interact_pointer_pos().or_else(|| ui.input(|i| i.pointer.hover_pos()));
     if let Some(pos) = pointer {
-        if ruler.contains(pos) || ed.scrubbing {
+        if (lane_h > 0.0 && lane.contains(pos) && !ed.scrubbing) || ed.vel_drag {
+            // 強さのレーン。ここでは音符を置かず、強さだけ変える
+            handle_vel(&resp, pos, project, score, history, ed, &view, &lane, &mut out);
+        } else if ruler.contains(pos) || ed.scrubbing {
             // 物差しの上。ここでは音符を触らず、鳴らす位置だけ動かす
             handle_ruler(&resp, ui, pos, &view, total_steps, ed, &mut out);
         } else if rect.contains(pos) {
@@ -270,6 +286,7 @@ pub fn piano_roll(
         history.end_group();
         ed.grab = Grab::None;
         ed.box_to = None;
+        ed.vel_drag = false;
         ed.scrubbing = false;
         ed.loop_from = None;
     }
@@ -497,6 +514,92 @@ fn draw_box(p: &egui::Painter, ed: &Editor, v: &View) {
     p.rect_filled(r, 1.0, Color32::from_rgba_unmultiplied(0x0a, 0x84, 0xff, 40));
     p.rect_stroke(r, 1.0, Stroke::new(1.0, theme::BLUE));
 }
+
+/// 強さのレーン。音符1本ずつを棒で出す。
+///
+/// **音程は見ない。** 同じ所に重なっている音は、上の音の棒だけが見える
+/// （掴めるのも上の音）。和音の中の1本だけを変えたいときは、先に選んでおく。
+fn draw_vel(
+    p: &egui::Painter,
+    project: &Project,
+    score: &Score,
+    ed: &Editor,
+    v: &View,
+    lane: &Rect,
+) {
+    p.rect_filled(*lane, 0.0, theme::SURFACE);
+    p.line_segment(
+        [Pos2::new(lane.left(), lane.top()), Pos2::new(lane.right(), lane.top())],
+        Stroke::new(1.0, theme::LINE_STRONG),
+    );
+    let notes: &[tonescript_song::model::Note] = project
+        .notes
+        .get(&ed.part)
+        .map(|v| v.as_slice())
+        .or_else(|| score.get(&ed.part).map(|v| v.as_slice()))
+        .unwrap_or(&[]);
+    let base = theme::part_color(&ed.part);
+    let inner = lane.height() - 8.0;
+    for (i, n) in notes.iter().enumerate() {
+        let x0 = v.x_of(n.pos as f32);
+        let x1 = v.x_of((n.pos + n.len.max(1)) as f32);
+        if x1 < lane.left() || x0 > lane.right() {
+            continue;
+        }
+        let h = inner * (n.vel as f32 / 127.0);
+        let top = lane.bottom() - 4.0 - h;
+        let r = Rect::from_min_max(
+            Pos2::new(x0, top),
+            Pos2::new((x1 - 1.0).max(x0 + 2.0), lane.bottom() - 4.0),
+        );
+        let picked = ed.is_selected(i);
+        let a = if picked { 235 } else { 150 };
+        p.rect_filled(r, 1.0, Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), a));
+        if picked {
+            p.rect_stroke(r, 1.0, Stroke::new(1.0, theme::LABEL));
+        }
+    }
+}
+
+/// 強さのレーンの触り。押した高さがそのまま強さになる。
+#[allow(clippy::too_many_arguments)]
+fn handle_vel(
+    resp: &egui::Response,
+    pos: Pos2,
+    project: &mut Project,
+    score: &Score,
+    history: &mut History,
+    ed: &mut Editor,
+    v: &View,
+    lane: &Rect,
+    out: &mut Touched,
+) {
+    if !(resp.dragged() || resp.clicked() || resp.drag_started()) {
+        return;
+    }
+    ed.vel_drag = true;
+    // 曲ファイルが作ったぶんを触るときは、まず手元へ写す
+    if !project.is_edited(&ed.part) {
+        let from = score.get(&ed.part).cloned().unwrap_or_default();
+        project.notes.insert(ed.part.clone(), from);
+    }
+    let step = v.step_at(pos.x);
+    let inner = (lane.height() - 8.0).max(1.0);
+    let up = (lane.bottom() - 4.0 - pos.y) / inner;
+    let want = (up.clamp(0.0, 1.0) * 127.0).round().max(1.0) as u8;
+
+    let Some(ns) = project.notes.get_mut(&ed.part) else { return };
+    let Some(i) = crate::sel::at_step(ns, step) else { return };
+    // 引きずっているあいだは1段にまとめる
+    history.record(project, Tag::Curve(ed.part.clone(), "vel"));
+    let Some(ns) = project.notes.get_mut(&ed.part) else { return };
+    if crate::sel::set_vel(ns, i, want, &ed.sel) {
+        out.changed = true;
+    }
+}
+
+/// 強さのレーンの高さ。
+pub const VEL_H: f32 = 84.0;
 
 /// 音符の右端をつかむ幅（ピクセル）。
 const EDGE: f32 = 5.0;
