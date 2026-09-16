@@ -42,6 +42,17 @@ impl View {
     }
 }
 
+/// 音声トラックのどこを掴んでいるか。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClipPart {
+    /// 真ん中。動かす
+    Body,
+    /// 左の端。頭を切る
+    Head,
+    /// 右の端。尻を切る
+    Tail,
+}
+
 /// 掴んでいるもの。
 #[derive(Clone, Debug, PartialEq)]
 pub enum Grab {
@@ -72,6 +83,10 @@ pub struct Editor {
     pub show_vel: bool,
     /// 強さのレーンを引きずっている最中か
     pub vel_drag: bool,
+    /// 音声トラックのレーンを出すか
+    pub show_audio: bool,
+    /// 音声トラックを掴んでいる `(名前, どこを, 掴んだときのずれ)`
+    pub clip_grab: Option<(String, ClipPart, f32)>,
     /// 譜面の見えている幅（ピクセル）。ボタンが拡大率を出すのに使う
     pub view_w: f32,
     /// 物差しを引きずっている最中か
@@ -91,6 +106,8 @@ impl Default for Editor {
             box_to: None,
             show_vel: true,
             vel_drag: false,
+            show_audio: true,
+            clip_grab: None,
             view_w: 800.0,
             scrubbing: false,
             loop_from: None,
@@ -192,6 +209,41 @@ pub struct Touched {
     /// 触った音を鳴らしてほしい `(パート, 音程, 強さ, 長さ)`。
     /// 置いた・掴んだ・音程を変えたときに入る
     pub hit: Option<(String, i32, u8, u32)>,
+    /// 音声トラックを触った
+    pub clip: Option<ClipEdit>,
+}
+
+/// 音声トラック1本ぶんの見え方。画面側が用意する。
+///
+/// 波形そのものではなく、**山の高さだけを間引いたもの**を持つ。
+/// 3分の歌は 800 万サンプルあるが、描くのに要るのは数百点しかない。
+#[derive(Clone, Debug)]
+pub struct Clip {
+    pub name: String,
+    pub label: String,
+    /// 曲のどこから鳴るか（目盛り）
+    pub at: u32,
+    /// 何目盛りぶん鳴るか（切り詰めたあと）
+    pub len: f32,
+    /// 何秒ぶん鳴るか（切り詰めたあと）。目盛りと秒の換算に使う
+    pub secs: f32,
+    /// 山の高さ。左から順に
+    pub peaks: Vec<f32>,
+    pub gain: f32,
+    /// 切り詰めた秒数。端を掴んだときの目安に出す
+    pub trim_in: f32,
+    pub trim_out: f32,
+}
+
+/// 音声トラックを触った結果。
+#[derive(Clone, Debug, PartialEq)]
+pub enum ClipEdit {
+    /// ここへ動かした（目盛り）
+    Move { name: String, at: u32 },
+    /// 頭を何秒落とすか変えた
+    TrimIn { name: String, secs: f32 },
+    /// 尻を何秒落とすか変えた
+    TrimOut { name: String, secs: f32 },
 }
 
 /// 再生の様子。画面から渡してもらう。
@@ -213,6 +265,7 @@ pub fn piano_roll(
     history: &mut History,
     ed: &mut Editor,
     tr: &Transport,
+    clips: &[Clip],
     zoom: &mut f32,
     scroll: &mut f32,
 ) -> Touched {
@@ -226,7 +279,17 @@ pub fn piano_roll(
     // 下に強さのレーン。狭い窓では出さない（譜面が潰れる）
     let lane_h = if ed.show_vel && whole.height() > RULER_H + VEL_H + 80.0 { VEL_H } else { 0.0 };
     let lane = Rect::from_min_max(Pos2::new(whole.min.x, whole.max.y - lane_h), whole.max);
-    let rect = Rect::from_min_max(Pos2::new(whole.min.x, ruler.max.y), 
+    // 物差しのすぐ下に音声の帯。小節に揃えて見せるため、譜面と同じ目盛りを使う
+    let audio_h = if ed.show_audio && !clips.is_empty() {
+        (CLIP_H * clips.len() as f32).min(CLIP_H * 3.0)
+    } else {
+        0.0
+    };
+    let audio = Rect::from_min_max(
+        Pos2::new(whole.min.x, ruler.max.y),
+        Pos2::new(whole.max.x, ruler.max.y + audio_h),
+    );
+    let rect = Rect::from_min_max(Pos2::new(whole.min.x, audio.max.y),
         Pos2::new(whole.max.x, whole.max.y - lane_h));
 
     // 音程の範囲。手で置いたぶんも含める
@@ -266,11 +329,16 @@ pub fn piano_roll(
     if lane_h > 0.0 {
         draw_vel(&p, project, score, ed, &view, &lane);
     }
+    if audio_h > 0.0 {
+        draw_clips(&p, clips, ed, &view, &audio);
+    }
 
     // ---- 触り
     let pointer = resp.interact_pointer_pos().or_else(|| ui.input(|i| i.pointer.hover_pos()));
     if let Some(pos) = pointer {
-        if (lane_h > 0.0 && lane.contains(pos) && !ed.scrubbing) || ed.vel_drag {
+        if (audio_h > 0.0 && audio.contains(pos) && !ed.scrubbing) || ed.clip_grab.is_some() {
+            handle_clips(&resp, ui, pos, clips, ed, &view, &audio, &mut out);
+        } else if (lane_h > 0.0 && lane.contains(pos) && !ed.scrubbing) || ed.vel_drag {
             // 強さのレーン。ここでは音符を置かず、強さだけ変える
             handle_vel(&resp, pos, project, score, history, ed, &view, &lane, &mut out);
         } else if ruler.contains(pos) || ed.scrubbing {
@@ -287,6 +355,7 @@ pub fn piano_roll(
         ed.grab = Grab::None;
         ed.box_to = None;
         ed.vel_drag = false;
+        ed.clip_grab = None;
         ed.scrubbing = false;
         ed.loop_from = None;
     }
@@ -596,6 +665,137 @@ fn handle_vel(
     if crate::sel::set_vel(ns, i, want, &ed.sel) {
         out.changed = true;
     }
+}
+
+/// 音声トラック1本ぶんの高さ。
+pub const CLIP_H: f32 = 46.0;
+/// 端を掴む幅（ピクセル）。
+const CLIP_EDGE: f32 = 6.0;
+
+/// 音声トラックを、小節に揃えて描く。
+fn draw_clips(p: &egui::Painter, clips: &[Clip], ed: &Editor, v: &View, lane: &Rect) {
+    p.rect_filled(*lane, 0.0, theme::SURFACE);
+    for (i, c) in clips.iter().enumerate() {
+        let top = lane.top() + i as f32 * CLIP_H;
+        if top > lane.bottom() {
+            break;
+        }
+        let r = clip_rect(c, v, lane, i);
+        if r.right() < lane.left() || r.left() > lane.right() {
+            continue;
+        }
+        let held = ed.clip_grab.as_ref().is_some_and(|(n, _, _)| *n == c.name);
+        let base = theme::part_color(&c.name);
+        p.rect_filled(r, 3.0, Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), 46));
+        p.rect_stroke(
+            r,
+            3.0,
+            Stroke::new(if held { 1.6 } else { 1.0 }, if held { theme::LABEL } else { base }),
+        );
+        // 波形。山の高さを縦の線で出す
+        let mid = r.center().y;
+        let half = (CLIP_H * 0.5 - 8.0).max(2.0);
+        let w = r.width().max(1.0);
+        let n = c.peaks.len().max(1);
+        let step = (w / 220.0).max(1.0); // 1ピクセルおきに描くと細かすぎる
+        let mut x = r.left().max(lane.left());
+        while x < r.right().min(lane.right()) {
+            let t = ((x - r.left()) / w).clamp(0.0, 1.0);
+            let h = c.peaks[((t * n as f32) as usize).min(n - 1)] * half * c.gain.min(1.5);
+            p.line_segment(
+                [Pos2::new(x, mid - h), Pos2::new(x, mid + h)],
+                Stroke::new(1.0, base),
+            );
+            x += step;
+        }
+        // 名前。左端が画面の外なら、見える所へ寄せる
+        let tx = r.left().max(lane.left()) + 4.0;
+        p.text(
+            Pos2::new(tx, top + 2.0),
+            egui::Align2::LEFT_TOP,
+            &c.label,
+            egui::FontId::proportional(11.0),
+            theme::DIM,
+        );
+    }
+}
+
+/// そのトラックが画面のどこに出るか。
+fn clip_rect(c: &Clip, v: &View, lane: &Rect, row: usize) -> Rect {
+    let top = lane.top() + row as f32 * CLIP_H;
+    Rect::from_min_max(
+        Pos2::new(v.x_of(c.at as f32), top + 1.0),
+        Pos2::new(v.x_of(c.at as f32 + c.len).max(v.x_of(c.at as f32) + 3.0), top + CLIP_H - 3.0),
+    )
+}
+
+/// 音声トラックの触り。真ん中を掴めば動き、端を掴めば切り詰める。
+#[allow(clippy::too_many_arguments)]
+fn handle_clips(
+    resp: &egui::Response,
+    _ui: &egui::Ui,
+    pos: Pos2,
+    clips: &[Clip],
+    ed: &mut Editor,
+    v: &View,
+    lane: &Rect,
+    out: &mut Touched,
+) {
+    let step = v.step_at(pos.x);
+    if resp.drag_started() {
+        ed.clip_grab = None;
+        for (i, c) in clips.iter().enumerate() {
+            let r = clip_rect(c, v, lane, i);
+            if !r.contains(pos) {
+                continue;
+            }
+            let part = if (pos.x - r.left()).abs() <= CLIP_EDGE {
+                ClipPart::Head
+            } else if (r.right() - pos.x).abs() <= CLIP_EDGE {
+                ClipPart::Tail
+            } else {
+                ClipPart::Body
+            };
+            ed.clip_grab = Some((c.name.clone(), part, step - c.at as f32));
+            break;
+        }
+        return;
+    }
+    if !resp.dragged() {
+        return;
+    }
+    let Some((name, part, offset)) = ed.clip_grab.clone() else { return };
+    let Some(c) = clips.iter().find(|c| c.name == name) else { return };
+    // 1目盛りあたり何秒か。切り詰めを秒で持っているので換算する
+    let per_step = ((v.x_of(1.0) - v.x_of(0.0)) / v.zoom.max(1e-6)).abs();
+    let _ = per_step;
+    match part {
+        ClipPart::Body => {
+            let want = ed.snapped((step - offset).max(0.0));
+            if want != c.at {
+                out.clip = Some(ClipEdit::Move { name, at: want });
+            }
+        }
+        ClipPart::Head => {
+            // 左端を右へ動かすと、そのぶん頭が落ちる
+            let d = step - c.at as f32;
+            let secs = c.trim_in + steps_to_secs(d, c);
+            out.clip = Some(ClipEdit::TrimIn { name, secs: secs.max(0.0) });
+        }
+        ClipPart::Tail => {
+            let d = (c.at as f32 + c.len) - step;
+            let secs = c.trim_out + steps_to_secs(d, c);
+            out.clip = Some(ClipEdit::TrimOut { name, secs: secs.max(0.0) });
+        }
+    }
+}
+
+/// 目盛りの差を秒へ。そのトラックの長さから逆算する。
+fn steps_to_secs(steps: f32, c: &Clip) -> f32 {
+    if c.len <= 0.0 || c.secs <= 0.0 {
+        return 0.0;
+    }
+    steps * (c.secs / c.len)
 }
 
 /// 強さのレーンの高さ。

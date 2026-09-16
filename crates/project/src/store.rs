@@ -238,6 +238,11 @@ fn encode(p: &Project) -> Value {
         one.insert("gain", t.gain.into());
         one.insert("label", t.label.as_str().into());
         one.insert("color", t.color.as_str().into());
+        one.insert("at", t.at.into());
+        one.insert("trim_in", t.trim_in.into());
+        one.insert("trim_out", t.trim_out.into());
+        one.insert("fade_in", t.fade_in.into());
+        one.insert("fade_out", t.fade_out.into());
         takes.insert(name, one);
     }
     root.insert("takes", takes);
@@ -339,6 +344,12 @@ fn decode(v: &Value) -> Result<Project, String> {
             if path.is_empty() || path.contains(':') || path.starts_with('/') {
                 continue;
             }
+            let secs = |k: &str| {
+                one.get(k)
+                    .and_then(|x| x.as_f64())
+                    .map(|v| (v as f32).clamp(0.0, 600.0))
+                    .unwrap_or(0.0)
+            };
             p.takes.insert(
                 name.clone(),
                 AudioTrack {
@@ -350,6 +361,11 @@ fn decode(v: &Value) -> Result<Project, String> {
                         .unwrap_or(1.0),
                     label: text("label"),
                     color: text("color"),
+                    at: one.get("at").and_then(|x| x.as_u32()).unwrap_or(0),
+                    trim_in: secs("trim_in"),
+                    trim_out: secs("trim_out"),
+                    fade_in: secs("fade_in"),
+                    fade_out: secs("fade_out"),
                 },
             );
         }
@@ -463,6 +479,10 @@ mod tests {
                 gain: 0.9,
                 label: "テイク1".into(),
                 color: String::new(),
+                at: 32,
+                trim_in: 0.25,
+                fade_out: 0.5,
+                ..Default::default()
             },
         );
         p.muted.push("perc".into());
@@ -496,6 +516,9 @@ mod tests {
         assert_eq!(back.takes["take1"].path, "takes/a.wav");
         assert!((back.takes["take1"].gain - 0.9).abs() < 1e-6);
         assert_eq!(back.takes["take1"].label, "テイク1");
+        assert_eq!(back.takes["take1"].at, 32, "置き場所が消えた");
+        assert!((back.takes["take1"].trim_in - 0.25).abs() < 1e-6, "切り詰めが消えた");
+        assert!((back.takes["take1"].fade_out - 0.5).abs() < 1e-6, "出が消えた");
     }
 
     #[test]
@@ -507,12 +530,7 @@ mod tests {
         for bad in ["C:/tmp/a.wav", "/tmp/a.wav"] {
             p.takes.insert(
                 bad.into(),
-                AudioTrack {
-                    path: bad.into(),
-                    gain: 1.0,
-                    label: String::new(),
-                    color: String::new(),
-                },
+                AudioTrack { path: bad.into(), ..Default::default() },
             );
         }
         s.save(&p).unwrap();

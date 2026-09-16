@@ -505,15 +505,36 @@ fn build(scope: &Scope) -> R<Song> {
             }
             s.audio_tracks.insert(
                 name.to_string(),
-                AudioTrack {
-                    path,
-                    gain: field(&m, "gain").map(|v| num(v, "gain")).transpose()?.unwrap_or(1.0),
-                    label: field(&m, "label")
-                        .and_then(|v| v.clone().into_string().ok())
-                        .unwrap_or_else(|| name.to_string()),
-                    color: field(&m, "color")
-                        .and_then(|v| v.clone().into_string().ok())
-                        .unwrap_or_else(|| "#ff4d6d".into()),
+                {
+                    // 秒で指す値。負や大きすぎるものは読み込みで弾く
+                    let secs = |k: &str| -> R<f32> {
+                        let v = field(&m, k).map(|v| num(v, k)).transpose()?.unwrap_or(0.0);
+                        if !(0.0..=600.0).contains(&v) {
+                            return shape(format!(
+                                "AUDIO_TRACKS.{name} の {k} が {v} です。0〜600 秒の間に"
+                            ));
+                        }
+                        Ok(v)
+                    };
+                    let at = field(&m, "at").map(|v| num(v, "at")).transpose()?.unwrap_or(0.0);
+                    if at < 0.0 {
+                        return shape(format!("AUDIO_TRACKS.{name} の at が負です"));
+                    }
+                    AudioTrack {
+                        path,
+                        gain: field(&m, "gain").map(|v| num(v, "gain")).transpose()?.unwrap_or(1.0),
+                        label: field(&m, "label")
+                            .and_then(|v| v.clone().into_string().ok())
+                            .unwrap_or_else(|| name.to_string()),
+                        color: field(&m, "color")
+                            .and_then(|v| v.clone().into_string().ok())
+                            .unwrap_or_else(|| "#ff4d6d".into()),
+                        at: at as u32,
+                        trim_in: secs("trim_in")?,
+                        trim_out: secs("trim_out")?,
+                        fade_in: secs("fade_in")?,
+                        fade_out: secs("fade_out")?,
+                    }
                 },
             );
         }

@@ -133,6 +133,41 @@ pub fn render_stems(song: &Song, score: &Score, progress: Progress) -> Stems {
         .collect()
 }
 
+/// 音声を、曲の上へ置ける形に整える。
+///
+/// 頭と尻を落とし、出入りを滑らかにして、曲の位置まで前へ送る。
+/// **鳴らす側も書き出す側も、ここを通る。**
+pub fn place(l: &[f32], r: &[f32], t: &tonescript_song::model::AudioTrack, at: usize) -> Stereo {
+    let n = l.len().min(r.len());
+    let cut_in = ((t.trim_in * SR) as usize).min(n);
+    let cut_out = ((t.trim_out * SR) as usize).min(n - cut_in);
+    let body = n - cut_in - cut_out;
+    let mut out = Stereo { l: vec![0.0; at + body], r: vec![0.0; at + body] };
+    if body == 0 {
+        return out;
+    }
+    // 出入り。足して body を超えるときは、半分ずつに収める
+    let mut fi = ((t.fade_in * SR) as usize).min(body);
+    let mut fo = ((t.fade_out * SR) as usize).min(body);
+    if fi + fo > body {
+        let half = body / 2;
+        fi = fi.min(half);
+        fo = fo.min(body - half);
+    }
+    for i in 0..body {
+        let mut g = 1.0f32;
+        if fi > 0 && i < fi {
+            g *= i as f32 / fi as f32;
+        }
+        if fo > 0 && i >= body - fo {
+            g *= (body - i) as f32 / fo as f32;
+        }
+        out.l[at + i] = l[cut_in + i] * g;
+        out.r[at + i] = r[cut_in + i] * g;
+    }
+    out
+}
+
 /// 外で作った歌（AUDIO_TRACKS）を読む。
 ///
 /// 譜面ではなく WAV をそのまま鳴らす。Synthesizer V などで書き出した歌を
@@ -168,14 +203,25 @@ pub fn load_audio_tracks(
                     continue;
                 }
                 let secs = l.len() as f32 / SR;
+                // 置き場所・切り詰め・出入りを当てる
+                let times = arrange::step_times(song);
+                let at = (times[(t.at as usize).min(times.len() - 1)] * SR as f64) as usize;
+                let placed = place(&l, &r, t, at);
+                let mut note = String::new();
+                if t.at > 0 {
+                    note += &format!("  {}目盛りから", t.at);
+                }
+                if t.trim_in > 0.0 || t.trim_out > 0.0 {
+                    note += &format!("  切り詰め {:.2}/{:.2}秒", t.trim_in, t.trim_out);
+                }
+                if t.fade_in > 0.0 || t.fade_out > 0.0 {
+                    note += &format!("  出入り {:.2}/{:.2}秒", t.fade_in, t.fade_out);
+                }
                 progress(&format!(
-                    "       {:<10} x{:.2}  {:.1}秒  {}",
-                    t.label,
-                    t.gain,
-                    secs,
-                    t.path
+                    "       {:<10} x{:.2}  {:.1}秒  {}{}",
+                    t.label, t.gain, secs, t.path, note
                 ));
-                out.push((t.label.clone(), Stereo { l, r }, t.gain));
+                out.push((t.label.clone(), placed, t.gain));
             }
             Err(e) => missing.push(format!("{}: {e}", t.label)),
         }
@@ -417,6 +463,96 @@ pub fn render_song(song: &Song, progress: Progress) -> Result<(Stereo, Stems), S
     progress("[master] 仕上げ");
     master(&mut out, song.master_lufs, progress);
     Ok((out, stems))
+}
+
+
+#[cfg(test)]
+mod place_tests {
+    use super::*;
+    use tonescript_song::model::AudioTrack;
+
+    fn track() -> AudioTrack {
+        AudioTrack { path: "x.wav".into(), ..Default::default() }
+    }
+
+    fn flat(n: usize) -> Vec<f32> {
+        vec![1.0; n]
+    }
+
+    #[test]
+    fn plain_audio_is_left_alone() {
+        let x = flat(100);
+        let out = place(&x, &x, &track(), 0);
+        assert_eq!(out.len(), 100);
+        assert!(out.l.iter().all(|v| *v == 1.0), "何もしていないのに触った");
+    }
+
+    #[test]
+    fn it_lands_where_it_was_put() {
+        let x = flat(100);
+        let out = place(&x, &x, &track(), 50);
+        assert_eq!(out.len(), 150);
+        assert!(out.l[..50].iter().all(|v| *v == 0.0), "前が無音になっていない");
+        assert_eq!(out.l[50], 1.0, "置いた所から始まっていない");
+        assert_eq!(out.l[149], 1.0);
+    }
+
+    #[test]
+    fn trimming_takes_off_both_ends() {
+        let n = (1.0 * SR) as usize;
+        let mut x = vec![1.0f32; n];
+        x[0] = 9.0; // 頭の物音
+        x[n - 1] = 9.0; // 尻の物音
+        let t = AudioTrack { trim_in: 0.1, trim_out: 0.1, ..track() };
+        let out = place(&x, &x, &t, 0);
+        let want = n - (0.2 * SR) as usize;
+        assert!((out.len() as i32 - want as i32).abs() < 2, "長さが {}", out.len());
+        assert!(out.l.iter().all(|v| *v < 9.0), "落としたはずの物音が残っている");
+    }
+
+    #[test]
+    fn fades_go_from_nothing_to_all() {
+        let n = (1.0 * SR) as usize;
+        let x = flat(n);
+        let t = AudioTrack { fade_in: 0.2, fade_out: 0.2, ..track() };
+        let out = place(&x, &x, &t, 0);
+        assert_eq!(out.l[0], 0.0, "頭から鳴っている");
+        let mid_in = (0.1 * SR) as usize;
+        assert!((out.l[mid_in] - 0.5).abs() < 0.01, "入りの半ばが {}", out.l[mid_in]);
+        assert!((out.l[n / 2] - 1.0).abs() < 1e-6, "真ん中で下がっている");
+        assert!(*out.l.last().unwrap() < 0.01, "尻が消えていない");
+    }
+
+    #[test]
+    fn overlapping_fades_share_the_space() {
+        // 1秒の音に、入り1秒・出1秒。足すと足りないので半分ずつに収める
+        let n = (1.0 * SR) as usize;
+        let x = flat(n);
+        let t = AudioTrack { fade_in: 1.0, fade_out: 1.0, ..track() };
+        let out = place(&x, &x, &t, 0);
+        assert_eq!(out.len(), n, "長さが変わった");
+        assert!(out.l.iter().all(|v| *v <= 1.0 + 1e-6), "1 を超えた");
+        // 真ん中がいちばん大きいこと
+        let peak_at = out
+            .l
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .map(|(i, _)| i)
+            .unwrap();
+        assert!(
+            (peak_at as i32 - (n / 2) as i32).abs() < (n / 5) as i32,
+            "山が真ん中に無い: {peak_at}"
+        );
+    }
+
+    #[test]
+    fn trimming_everything_leaves_silence_not_a_crash() {
+        let x = flat(100);
+        let t = AudioTrack { trim_in: 10.0, trim_out: 10.0, ..track() };
+        let out = place(&x, &x, &t, 10);
+        assert!(out.l.iter().all(|v| *v == 0.0));
+    }
 }
 
 #[cfg(test)]

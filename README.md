@@ -107,7 +107,7 @@ interpolation above, which is the improvement.
 The 21× on `highpass` is where Python's cleverness disappeared: an FFT
 convolution became a three-line loop.
 
-398 tests.
+402 tests.
 
 ## Not ported
 
@@ -227,7 +227,7 @@ AI に書かせるなら「SONGFILE.ja.md に従って songs/x.rhai を書いて
 `highpass` の21倍が「Python の賢さが消えた」ところ。FFT 畳み込みが
 3行のループになった。
 
-テスト 398 件。
+テスト 402 件。
 
 ## 移植しなかったもの
 

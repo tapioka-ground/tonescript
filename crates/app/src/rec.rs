@@ -14,9 +14,11 @@
 //!
 //! 曲のどこから録ったか
 //! --------------------
-//! `AUDIO_TRACKS` は「曲の 0 秒から始まっている」前提なので、途中から録った
-//! ものは**頭に無音を足してから**書く。5小節目から歌っても、そのまま置けば
-//! 5小節目で鳴る。
+//! 書くのは**歌ったぶんだけ**で、頭に無音は足さない。どこから鳴らすかは
+//! `AUDIO_TRACKS` の `at` が持つ。5小節目から歌えば `at` が5小節目を指す。
+//!
+//! 無音を足す手もあったが、そうすると「あとで置き場所を直す」ができない。
+//! 位置は**データとして持つ**ほうが後から動かせる。
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -236,7 +238,7 @@ impl Rec {
         n / self.sample_rate.max(1) as f32
     }
 
-    /// 録り終える。左右そろえて返す。**頭に無音を足して曲の 0 秒へ揃える。**
+    /// 録り終える。左右そろえて返す。歌ったぶんだけで、頭は足さない。
     pub fn finish(mut self) -> Result<(Vec<f32>, Vec<f32>), String> {
         drop(self.stream.take()); // 先に止める
         self.stop.store(true, Ordering::Relaxed);
@@ -252,23 +254,8 @@ impl Rec {
             l = resample(&l, self.sample_rate, SR as u32);
             r = resample(&r, self.sample_rate, SR as u32);
         }
-        Ok(align(l, r, self.from as usize))
+        Ok((l, r))
     }
-}
-
-/// 曲の 0 秒へ揃える。途中から録ったぶんは、頭に無音を足す。
-///
-/// `AUDIO_TRACKS` は「曲の 0 秒から始まっている」前提なので、ここで揃えて
-/// おかないと、5小節目から歌ったものが曲の頭で鳴ってしまう。
-pub fn align(l: Vec<f32>, r: Vec<f32>, pad: usize) -> (Vec<f32>, Vec<f32>) {
-    if pad == 0 {
-        return (l, r);
-    }
-    let mut a = vec![0.0f32; pad];
-    let mut b = vec![0.0f32; pad];
-    a.extend_from_slice(&l);
-    b.extend_from_slice(&r);
-    (a, b)
 }
 
 /// 48kHz を頼む。通らなければ機械に任せる。
@@ -366,22 +353,6 @@ mod tests {
         let (l, r) = split(&[1.0, -1.0, 2.0], 2);
         assert_eq!(l.len(), 1);
         assert_eq!(r.len(), 1);
-    }
-
-    #[test]
-    fn recording_from_the_top_is_not_padded() {
-        let (l, r) = align(vec![1.0, 2.0], vec![3.0, 4.0], 0);
-        assert_eq!(l, vec![1.0, 2.0]);
-        assert_eq!(r, vec![3.0, 4.0]);
-    }
-
-    #[test]
-    fn recording_from_the_middle_gets_silence_in_front() {
-        // 5小節目から歌ったものが、曲の頭で鳴ってしまわないこと
-        let (l, r) = align(vec![1.0, 2.0], vec![1.0, 2.0], 3);
-        assert_eq!(l, vec![0.0, 0.0, 0.0, 1.0, 2.0]);
-        assert_eq!(r.len(), 5);
-        assert_eq!(r[3], 1.0, "足した無音のぶんだけ後ろへ寄っていない");
     }
 
     #[test]

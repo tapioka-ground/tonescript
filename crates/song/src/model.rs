@@ -147,6 +147,32 @@ pub struct AudioTrack {
     pub gain: f32,
     pub label: String,
     pub color: String,
+    /// 曲のどこから鳴らすか（目盛り）。0 なら曲の頭
+    pub at: u32,
+    /// 頭を何秒落とすか。息継ぎや前の物音を切る
+    pub trim_in: f32,
+    /// 尻を何秒落とすか
+    pub trim_out: f32,
+    /// 何秒かけて入るか
+    pub fade_in: f32,
+    /// 何秒かけて消えるか
+    pub fade_out: f32,
+}
+
+impl Default for AudioTrack {
+    fn default() -> Self {
+        Self {
+            path: String::new(),
+            gain: 1.0,
+            label: String::new(),
+            color: "#ff4d6d".into(),
+            at: 0,
+            trim_in: 0.0,
+            trim_out: 0.0,
+            fade_in: 0.0,
+            fade_out: 0.0,
+        }
+    }
 }
 
 /// オートメーションの節。(目盛りの位置, 値)

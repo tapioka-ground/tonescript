@@ -523,13 +523,24 @@ let MIX = #{
 let AUDIO_TRACKS = #{
     main:    #{ path: "Vocal/main.wav",    gain: 1.00, label: "メイン" },
     double:  #{ path: "Vocal/double.wav",  gain: 0.85, label: "重ね" },
-    harmony: #{ path: "Vocal/harmony.wav", gain: 0.42, label: "ハモリ" },
+    harmony: #{ path: "Vocal/harmony.wav", gain: 0.42, label: "ハモリ",
+                at: 64, trim_in: 0.20, fade_out: 1.5 },
 };
 ```
 
-- パスは `TONESCRIPT_ROOT` からの**相対**。絶対パスは読み込みで弾く
-- **48kHz・16bit・ステレオかモノラル**。違うとエラー
-- 曲の 0 秒から始まっている前提。頭は詰めない
+| 鍵 | 中身 | 省略時 |
+|---|---|---|
+| `path` | `TONESCRIPT_ROOT` からの相対。絶対パスは弾く | 必須 |
+| `gain` | 0 にすれば読まない | 1.0 |
+| `label` | 画面に出る名前 | 鍵の名前 |
+| `at` | 何目盛り目から鳴らすか。0 は曲の頭 | 0 |
+| `trim_in` | 頭を何秒落とすか（息継ぎ、椅子の音） | 0 |
+| `trim_out` | 尻を何秒落とすか | 0 |
+| `fade_in` | 何秒かけて入るか | 0 |
+| `fade_out` | 何秒かけて消えるか | 0 |
+
+- **48kHz・16/24bit か 32bit 小数・ステレオかモノラル**。違うとエラー
+- 秒は 0〜600。`at` は目盛りなので、テンポが変われば付いてくる
 - 同じパートの別テイクを重ねると**ダブリング**になって太くなる
 - 使わないものは `gain: 0.0` にする
 - 歌には伴奏側のサイドチェインも尖り制限も掛からない
@@ -637,7 +648,7 @@ AI に伝えておくと良い点:
 | `DRUM_KITS` | | キット名→打点 | 無し |
 | `EXTRA_HITS` | | 名前→打点 | 無し |
 | `EDIT_PARTS` | | 文字列の配列 | `VOICES` の鍵 |
-| `AUDIO_TRACKS` | | 名前→歌 | 無し |
+| `AUDIO_TRACKS` | | 名前→歌（`at` `trim_in` `trim_out` `fade_in` `fade_out`） | 無し |
 | `GAINS` | | パート→倍率 | 1.0 |
 | `MASTER_GAIN` | | 数 | 1.0 |
 | `MIX` | | パート→設定 | 中央・残響無し・ダッキング無し |

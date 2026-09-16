@@ -131,6 +131,8 @@ struct App {
     clip: sel::Clip,
     /// 書き出しの形
     fmt: tonescript_render::export::Format,
+    /// 画面に出す音声トラック。読んだときに作る
+    clips: Vec<edit::Clip>,
     /// 繰り返す範囲だけ書き出すか
     export_loop: bool,
     /// 録っている最中。開いていれば Some
@@ -197,6 +199,7 @@ impl Default for App {
             last_frame: None,
             clip: sel::Clip::default(),
             fmt: tonescript_render::export::Format::default(),
+            clips: Vec::new(),
             export_loop: false,
             taking_audio: None,
             count_in: 4,
@@ -546,6 +549,33 @@ impl App {
         if !missing.is_empty() {
             self.status = format!("読めない音が {} 本あります（記録を見てください）", missing.len());
         }
+        // 画面に出すぶんを先に作る。波形は山だけ間引いて持つ
+        //（3分の歌は 800万サンプル。描くのに要るのは数百点）
+        let mut names: Vec<String> = song.audio_tracks.keys().cloned().collect();
+        names.sort();
+        let mut clips = Vec::new();
+        for name in &names {
+            let t = &song.audio_tracks[name];
+            let Some((_, st, _)) = list.iter().find(|(l, _, _)| *l == t.label) else { continue };
+            // 置いた位置より後ろだけが中身。頭の無音は数えない
+            let at_sample = self.sample_of(t.at as f32) as usize;
+            let body = st.len().saturating_sub(at_sample);
+            let secs = body as f32 / tonescript_dsp::osc::SR;
+            let len = self.sec_to_step(self.step_to_sec(t.at as f32) + secs as f64) - t.at as f32;
+            clips.push(edit::Clip {
+                name: name.clone(),
+                label: if t.label.is_empty() { name.clone() } else { t.label.clone() },
+                at: t.at,
+                len: len.max(0.5),
+                secs,
+                peaks: peaks_of(&st.l[at_sample.min(st.len())..], 400),
+                gain: t.gain,
+                trim_in: t.trim_in,
+                trim_out: t.trim_out,
+            });
+        }
+        self.clips = clips;
+
         let tracks = list
             .into_iter()
             .map(|(label, st, gain)| tonescript_engine::Track {
@@ -556,6 +586,30 @@ impl App {
             })
             .collect();
         self.engine.set_audio(tracks);
+    }
+
+    /// 音声トラックを触った。取り消せる形で当てる。
+    fn apply_clip(&mut self, e: edit::ClipEdit) {
+        let name = match &e {
+            edit::ClipEdit::Move { name, .. }
+            | edit::ClipEdit::TrimIn { name, .. }
+            | edit::ClipEdit::TrimOut { name, .. } => name.clone(),
+        };
+        // 曲ファイルに書いてあるものは触らない。触れるのは録ったものだけ
+        if !self.project.takes.contains_key(&name) {
+            self.status = "曲ファイルに書いてある音声は、ファイルを直してください".into();
+            return;
+        }
+        // 引きずっているあいだは1段にまとめる
+        self.history.record(&self.project, Tag::Curve(name.clone(), "clip"));
+        let Some(t) = self.project.takes.get_mut(&name) else { return };
+        match e {
+            edit::ClipEdit::Move { at, .. } => t.at = at,
+            edit::ClipEdit::TrimIn { secs, .. } => t.trim_in = secs.clamp(0.0, 600.0),
+            edit::ClipEdit::TrimOut { secs, .. } => t.trim_out = secs.clamp(0.0, 600.0),
+        }
+        self.saver.touched();
+        self.load_audio();
     }
 
     /// 録り始める。曲の今の位置から。
@@ -628,7 +682,9 @@ impl App {
                 path: format!("takes/{name}.wav"),
                 gain: 1.0,
                 label: name.clone(),
-                color: String::new(),
+                // 録り始めた所へ置く。頭に無音を足すのではなく位置で持つ
+                at: self.ed.snapped(self.head.max(0.0)),
+                ..Default::default()
             },
         );
         self.saver.touched();
@@ -1388,11 +1444,15 @@ impl eframe::App for App {
                 &mut self.history,
                 &mut self.ed,
                 &tr,
+                &self.clips,
                 &mut self.zoom,
                 &mut self.scroll,
             );
             if t.changed {
                 self.touched();
+            }
+            if let Some(e) = t.clip.clone() {
+                self.apply_clip(e);
             }
             if let Some((part, pitch, vel, len)) = t.hit {
                 self.audition(&part, pitch, vel, len);
@@ -1538,6 +1598,30 @@ fn open_folder(d: &std::path::Path) {
 ///
 /// 直したものは曲ファイル（.rhai）へ書き戻す。画面と曲ファイルで
 /// 値が食い違うのが一番よくないので、曲ファイルを正本にする。
+/// 波形を、山の高さだけに間引く。
+///
+/// 3分の歌は 800 万サンプルある。画面に出すのに要るのは数百点しかないので、
+/// **区間ごとの一番大きい所**だけを拾う。平均を取ると、波形が細く見えて
+/// 「録れていない」と勘違いする。
+fn peaks_of(x: &[f32], want: usize) -> Vec<f32> {
+    if x.is_empty() || want == 0 {
+        return Vec::new();
+    }
+    let per = (x.len() / want).max(1);
+    let mut out = Vec::with_capacity(want.min(x.len()));
+    let mut i = 0;
+    while i < x.len() {
+        let end = (i + per).min(x.len());
+        let mut m = 0.0f32;
+        for v in &x[i..end] {
+            m = m.max(v.abs());
+        }
+        out.push(m);
+        i = end;
+    }
+    out
+}
+
 fn settings_window(ctx: &egui::Context, app: &mut App) {
     let mut open = true;
     let mut apply = false;
@@ -2067,6 +2151,17 @@ impl App {
                         self.scroll = 0.0;
                     }
                     ui.checkbox(&mut self.follow, "追う");
+                    if !self.clips.is_empty()
+                        && ui
+                            .selectable_label(self.ed.show_audio, "音声")
+                            .on_hover_text(
+                                "録った音を小節に合わせて出す。
+                                 真ん中を掴めば動き、端を掴めば切り詰める",
+                            )
+                            .clicked()
+                    {
+                        self.ed.show_audio = !self.ed.show_audio;
+                    }
                     if ui
                         .selectable_label(self.ed.show_vel, "強さ")
                         .on_hover_text("下に強さのレーンを出す。押した高さがそのまま強さ")
@@ -2327,6 +2422,32 @@ impl App {
                                         .fixed_decimals(2),
                                 )
                                 .on_hover_text("音量。0 にすれば鳴らない")
+                                .changed()
+                            {
+                                changed = true;
+                            }
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut t.fade_in)
+                                        .speed(0.01)
+                                        .range(0.0..=30.0)
+                                        .fixed_decimals(2)
+                                        .prefix("入"),
+                                )
+                                .on_hover_text("何秒かけて入るか")
+                                .changed()
+                            {
+                                changed = true;
+                            }
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut t.fade_out)
+                                        .speed(0.01)
+                                        .range(0.0..=30.0)
+                                        .fixed_decimals(2)
+                                        .prefix("出"),
+                                )
+                                .on_hover_text("何秒かけて消えるか")
                                 .changed()
                             {
                                 changed = true;

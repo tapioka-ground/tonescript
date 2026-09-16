@@ -520,13 +520,24 @@ recover means more swell.
 let AUDIO_TRACKS = #{
     main:    #{ path: "Vocal/main.wav",    gain: 1.00, label: "Main" },
     double:  #{ path: "Vocal/double.wav",  gain: 0.85, label: "Double" },
-    harmony: #{ path: "Vocal/harmony.wav", gain: 0.42, label: "Harmony" },
+    harmony: #{ path: "Vocal/harmony.wav", gain: 0.42, label: "Harmony",
+                at: 64, trim_in: 0.20, fade_out: 1.5 },
 };
 ```
 
-- Paths are **relative** to `TONESCRIPT_ROOT`. Absolute paths are refused
-- **48kHz, 16-bit, mono or stereo.** Anything else is an error
-- Assumed to start at 0s. Nothing is trimmed
+| Key | Meaning | Default |
+|---|---|---|
+| `path` | relative to `TONESCRIPT_ROOT`. Absolute paths are refused | required |
+| `gain` | 0 to skip it entirely | 1.0 |
+| `label` | shown in the window | the name |
+| `at` | which step it starts on. 0 is the top of the song | 0 |
+| `trim_in` | seconds cut off the front (a breath, a chair creak) | 0 |
+| `trim_out` | seconds cut off the end | 0 |
+| `fade_in` | seconds to fade up | 0 |
+| `fade_out` | seconds to fade down | 0 |
+
+- **48kHz, 16/24-bit or 32-bit float, mono or stereo.** Anything else is an error
+- Seconds are 0–600. `at` is a step, so it follows tempo changes
 - Layering two takes of the same part is doubling, and it thickens
 - Set `gain: 0.0` for a track you aren't using
 - Vocals get neither the sidechain nor the crest limiter
@@ -634,7 +645,7 @@ Worth telling the AI up front:
 | `DRUM_KITS` | | kit → hits | none |
 | `EXTRA_HITS` | | name → hits | none |
 | `EDIT_PARTS` | | array of strings | the `VOICES` keys |
-| `AUDIO_TRACKS` | | name → track | none |
+| `AUDIO_TRACKS` | | name → track (`at` `trim_in` `trim_out` `fade_in` `fade_out`) | none |
 | `GAINS` | | part → multiplier | 1.0 |
 | `MASTER_GAIN` | | number | 1.0 |
 | `MIX` | | part → settings | centred, no reverb, no ducking |
