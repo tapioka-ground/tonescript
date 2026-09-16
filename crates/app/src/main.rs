@@ -19,6 +19,7 @@ mod edit;
 mod font;
 mod keys;
 mod mixer;
+mod rec;
 mod sel;
 mod newsong;
 mod play;
@@ -128,6 +129,13 @@ struct App {
     last_frame: Option<std::time::Instant>,
     /// 写したもの
     clip: sel::Clip,
+    /// 録っている最中。開いていれば Some
+    taking_audio: Option<rec::Rec>,
+    /// 入力の針
+    in_level: f32,
+    /// 見つかっている録る口
+    in_ports: Vec<String>,
+    in_ports_at: Option<std::time::Instant>,
 
     log: Vec<String>,
     rx: Option<mpsc::Receiver<Msg>>,
@@ -180,6 +188,10 @@ impl Default for App {
             needles: mixer::Needles::default(),
             last_frame: None,
             clip: sel::Clip::default(),
+            taking_audio: None,
+            in_level: 0.0,
+            in_ports: Vec::new(),
+            in_ports_at: None,
             log: Vec::new(),
             rx: None,
             busy: false,
@@ -279,6 +291,7 @@ impl App {
         self.taking.clear();
         self.rebuild();
         self.push_to_engine();
+        self.load_audio();
         // 開いた直後は曲ぜんぶが見えるほうが迷わない
         if let Some(song) = &self.song {
             self.zoom = edit::zoom_for_whole(song, self.ed.view_w);
@@ -482,6 +495,146 @@ impl App {
                 self.status = "曲ぜんぶを表示".into();
             }
         }
+    }
+
+    /// 曲ファイルに、手で触ったぶんを重ねたもの。
+    ///
+    /// **書き出しと鳴らす側で同じものを使う。** 2か所で重ねると必ずずれる。
+    fn merged_song(&self) -> Option<Song> {
+        let mut song = self.song.clone()?;
+        for (part, lanes) in &self.project.automation {
+            song.automation.insert(part.clone(), lanes.clone());
+        }
+        for (part, g) in &self.project.gains {
+            song.gains.insert(part.clone(), *g);
+        }
+        for (part, m) in &self.project.mix {
+            song.mix.insert(part.clone(), *m);
+        }
+        for (name, t) in &self.project.takes {
+            song.audio_tracks.insert(name.clone(), t.clone());
+        }
+        Some(song)
+    }
+
+    /// 外で録った音を読んで、鳴らす側へ渡す。
+    ///
+    /// 読むのは重いので、曲を開いたときと、録り終えたときだけ。
+    fn load_audio(&mut self) {
+        let Some(song) = self.merged_song() else { return };
+        if song.audio_tracks.is_empty() {
+            self.engine.set_audio(Vec::new());
+            return;
+        }
+        let quiet = |_: &str| {};
+        let (list, missing) = tonescript_render::load_audio_tracks(&song, &out_dir(), &quiet);
+        for m in &missing {
+            self.log.push(format!("[!] {m}"));
+        }
+        if !missing.is_empty() {
+            self.status = format!("読めない音が {} 本あります（記録を見てください）", missing.len());
+        }
+        let tracks = list
+            .into_iter()
+            .map(|(label, st, gain)| tonescript_engine::Track {
+                label,
+                l: Arc::new(st.l),
+                r: Arc::new(st.r),
+                gain,
+            })
+            .collect();
+        self.engine.set_audio(tracks);
+    }
+
+    /// 録り始める。曲の今の位置から。
+    fn start_rec(&mut self, which: Option<usize>) {
+        if self.taking_audio.is_some() {
+            return;
+        }
+        let from = self.sample_of(self.head);
+        let r = rec::Rec::start(which, from);
+        match (&r.error, r.is_open()) {
+            (Some(e), _) => {
+                self.status = format!("[!] 録れません: {e}");
+                return;
+            }
+            (None, false) => {
+                self.status = "録る口が開きません".into();
+                return;
+            }
+            _ => {}
+        }
+        self.status = format!(
+            "録っています: {}（{} ch / {} Hz）",
+            r.name.clone().unwrap_or_default(),
+            r.channels,
+            r.sample_rate
+        );
+        self.taking_audio = Some(r);
+    }
+
+    /// 録り終えて、曲へ入れる。
+    fn stop_rec(&mut self) {
+        let Some(r) = self.taking_audio.take() else { return };
+        let secs = r.seconds();
+        let (l, r2) = match r.finish() {
+            Ok(v) => v,
+            Err(e) => {
+                self.status = format!("[!] {e}");
+                return;
+            }
+        };
+        // 書き出し先は TONESCRIPT_ROOT からの相対。曲ごと渡しても開ける
+        let dir = out_dir().join("takes");
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            self.status = format!("[!] 置き場が作れません: {e}");
+            return;
+        }
+        let stem = self.picked.clone().unwrap_or_else(|| "take".into());
+        let mut i = 1;
+        let (name, path) = loop {
+            let name = format!("{stem}-{i}");
+            let path = dir.join(format!("{name}.wav"));
+            if !path.exists() {
+                break (name, path);
+            }
+            i += 1;
+            if i > 999 {
+                self.status = "[!] 置き場がいっぱいです".into();
+                return;
+            }
+        };
+        let stereo = tonescript_render::mix::Stereo { l, r: r2 };
+        if let Err(e) = tonescript_render::wav::write_stereo(&path, &stereo, tonescript_dsp::osc::SR as u32) {
+            self.status = format!("[!] 書けません: {e}");
+            return;
+        }
+        self.record(Tag::Once);
+        self.project.takes.insert(
+            name.clone(),
+            tonescript_song::model::AudioTrack {
+                path: format!("takes/{name}.wav"),
+                gain: 1.0,
+                label: name.clone(),
+                color: String::new(),
+            },
+        );
+        self.saver.touched();
+        self.load_audio();
+        self.log.push(format!("録音 {name}  {secs:.1}秒  {}", path.display()));
+        self.status = format!("{name} に録りました（{secs:.1}秒）");
+    }
+
+    /// ぶら下がっている録る口を数え直す。
+    fn refresh_in_ports(&mut self) {
+        let fresh = self
+            .in_ports_at
+            .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(1));
+        if fresh {
+            return;
+        }
+        self.in_ports = rec::Rec::ports();
+        self.in_ports_at = Some(std::time::Instant::now());
     }
 
     /// 今の譜面と設定を鳴らす側へ渡す。
@@ -936,7 +1089,8 @@ impl App {
     }
 
     fn start_render(&mut self) {
-        let (Some(song), Some(name)) = (self.song.clone(), self.picked.clone()) else { return };
+        // 手で触ったぶんを重ねたものを書き出す。聞いたバランスがそのまま出る
+        let (Some(song), Some(name)) = (self.merged_song(), self.picked.clone()) else { return };
         let project = self.project.clone();
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
@@ -948,17 +1102,7 @@ impl App {
             let say = move |m: &str| {
                 let _ = tx2.send(Msg::Line(m.to_string()));
             };
-            // 手で触ったぶんを混ぜてから鳴らす
-            let mut song = song;
-            for (part, lanes) in &project.automation {
-                song.automation.insert(part.clone(), lanes.clone());
-            }
-            for (part, g) in &project.gains {
-                song.gains.insert(part.clone(), *g);
-            }
-            for (part, m) in &project.mix {
-                song.mix.insert(part.clone(), *m);
-            }
+            // 手で触ったぶんは呼ぶ側で混ぜてある（merged_song）
             let score = match build(&song) {
                 Ok(mut sc) => {
                     project.overlay(&mut sc);
@@ -1050,6 +1194,11 @@ impl eframe::App for App {
         let now = std::time::Instant::now();
         let dt = self.last_frame.map(|t| now.duration_since(t).as_secs_f32()).unwrap_or(0.016);
         self.last_frame = Some(now);
+        if let Some(r) = &self.taking_audio {
+            let now = r.take_level();
+            self.in_level = mixer::fall(now, self.in_level, dt.min(0.25));
+            ctx.request_repaint();
+        }
         if self.show_mixer {
             let parts: Vec<String> =
                 self.song.as_ref().map(|s| s.edit_parts.clone()).unwrap_or_default();
@@ -1800,6 +1949,63 @@ impl App {
                         }
                     }
                     ui.separator();
+                    // 録音
+                    if self.taking_audio.is_some() {
+                        let secs = self.taking_audio.as_ref().map(|r| r.seconds()).unwrap_or(0.0);
+                        if ui
+                            .add(egui::Button::new(format!("● 録音中 {secs:.1}秒")).fill(theme::RED))
+                            .on_hover_text("押すと録り終えて曲へ入れる")
+                            .clicked()
+                        {
+                            self.stop_rec();
+                        }
+                        // 入っているか目で分かるように
+                        let (rect, _) = ui.allocate_exact_size(
+                            egui::vec2(46.0, 10.0),
+                            egui::Sense::hover(),
+                        );
+                        ui.painter().rect_filled(rect, 2.0, theme::PANEL);
+                        let w = rect.width() * mixer::bar_of(self.in_level);
+                        if w > 0.5 {
+                            let c = if self.in_level > 0.99 { theme::RED } else { theme::GREEN };
+                            ui.painter().rect_filled(
+                                egui::Rect::from_min_size(rect.min, egui::vec2(w, rect.height())),
+                                2.0,
+                                c,
+                            );
+                        }
+                        if self.in_level > 0.99 {
+                            ui.colored_label(theme::RED, "割れています");
+                        }
+                    } else {
+                        let mut pick = None;
+                        let mut dflt = false;
+                        ui.menu_button("録音", |ui| {
+                            self.refresh_in_ports();
+                            if self.in_ports.is_empty() {
+                                ui.label(theme::dim("録る口が見つかりません"));
+                            }
+                            if ui.button("既定の口で録る").clicked() {
+                                dflt = true;
+                                ui.close_menu();
+                            }
+                            ui.separator();
+                            for (i, name) in self.in_ports.iter().enumerate() {
+                                if ui.button(name).clicked() {
+                                    pick = Some(i);
+                                    ui.close_menu();
+                                }
+                            }
+                        })
+                        .response
+                        .on_hover_text("マイクから録る。再生ヘッドの所から始まる");
+                        if dflt {
+                            self.start_rec(None);
+                        } else if let Some(i) = pick {
+                            self.start_rec(Some(i));
+                        }
+                    }
+                    ui.separator();
                     // 表示する範囲。拡大率そのものではなく「何小節ぶん」で選ぶ
                     if ui.button("全体").on_hover_text("曲ぜんぶを画面に収める").clicked() {
                         self.fit_bars(None);
@@ -1890,6 +2096,49 @@ impl App {
                         self.touched();
                     }
                 });
+            }
+
+            // 録ったもの
+            if !self.project.takes.is_empty() {
+                ui.add_space(10.0);
+                ui.separator();
+                ui.label(theme::head("録ったもの"));
+                let mut names: Vec<String> = self.project.takes.keys().cloned().collect();
+                names.sort();
+                let mut drop_it: Option<String> = None;
+                let mut changed = false;
+                for n in names {
+                    ui.horizontal(|ui| {
+                        if let Some(t) = self.project.takes.get_mut(&n) {
+                            ui.label(theme::dim(&n));
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut t.gain)
+                                        .speed(0.01)
+                                        .range(0.0..=4.0)
+                                        .fixed_decimals(2),
+                                )
+                                .on_hover_text("音量。0 にすれば鳴らない")
+                                .changed()
+                            {
+                                changed = true;
+                            }
+                        }
+                        if ui.small_button("×").on_hover_text("曲から外す（ファイルは残る）").clicked() {
+                            drop_it = Some(n.clone());
+                        }
+                    });
+                }
+                if let Some(n) = drop_it {
+                    self.record(Tag::Once);
+                    self.project.takes.remove(&n);
+                    self.saver.touched();
+                    self.load_audio();
+                    self.status = format!("{n} を曲から外しました（ファイルは残っています）");
+                } else if changed {
+                    self.saver.touched();
+                    self.load_audio();
+                }
             }
 
             ui.add_space(10.0);

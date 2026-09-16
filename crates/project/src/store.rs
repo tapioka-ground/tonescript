@@ -16,7 +16,7 @@
 
 use crate::json::{self, Value};
 use crate::{Project, FORMAT};
-use tonescript_song::model::{Curve, Lane, MixCfg, Note};
+use tonescript_song::model::{AudioTrack, Curve, Lane, MixCfg, Note};
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -230,6 +230,17 @@ fn encode(p: &Project) -> Value {
         mix.insert(part, one);
     }
     root.insert("mix", mix);
+
+    let mut takes = Value::obj();
+    for (name, t) in &p.takes {
+        let mut one = Value::obj();
+        one.insert("path", t.path.as_str().into());
+        one.insert("gain", t.gain.into());
+        one.insert("label", t.label.as_str().into());
+        one.insert("color", t.color.as_str().into());
+        takes.insert(name, one);
+    }
+    root.insert("takes", takes);
     root.insert("muted", Value::Arr(p.muted.iter().map(|s| s.as_str().into()).collect()));
     root.insert("soloed", Value::Arr(p.soloed.iter().map(|s| s.as_str().into()).collect()));
     root
@@ -314,6 +325,31 @@ fn decode(v: &Value) -> Result<Project, String> {
                     width: num("width", 0.0, 4.0, 0.0),
                     reverb: num("reverb", 0.0, 2.0, 0.0),
                     duck: num("duck", 0.0, 2.0, 0.0),
+                },
+            );
+        }
+    }
+    if let Some(m) = v.get("takes").and_then(|x| x.as_obj()) {
+        for (name, one) in m {
+            let text = |k: &str| {
+                one.get(k).and_then(|x| x.as_str()).unwrap_or_default().to_string()
+            };
+            let path = text("path");
+            // 絶対パスは読まない。曲ごと渡したときに他人の機械で開けなくなる
+            if path.is_empty() || path.contains(':') || path.starts_with('/') {
+                continue;
+            }
+            p.takes.insert(
+                name.clone(),
+                AudioTrack {
+                    path,
+                    gain: one
+                        .get("gain")
+                        .and_then(|x| x.as_f64())
+                        .map(|v| (v as f32).clamp(0.0, 8.0))
+                        .unwrap_or(1.0),
+                    label: text("label"),
+                    color: text("color"),
                 },
             );
         }
@@ -420,6 +456,15 @@ mod tests {
         );
         p.gains.insert("bass".into(), 0.8);
         p.mix.insert("lead".into(), MixCfg { width: 1.35, reverb: 0.26, duck: 0.55 });
+        p.takes.insert(
+            "take1".into(),
+            AudioTrack {
+                path: "takes/a.wav".into(),
+                gain: 0.9,
+                label: "テイク1".into(),
+                color: String::new(),
+            },
+        );
         p.muted.push("perc".into());
         p
     }
@@ -439,6 +484,40 @@ mod tests {
         assert!((lead.duck - 0.55).abs() < 1e-6);
         assert_eq!(back.mix["bass"].width, 0.0);
         assert_eq!(back, p);
+    }
+
+    #[test]
+    fn a_take_survives_a_save() {
+        let d = tmpdir("take");
+        let s = Store::new(&d, "example");
+        let p = sample();
+        s.save(&p).unwrap();
+        let back = s.load().unwrap().expect("あるはず");
+        assert_eq!(back.takes["take1"].path, "takes/a.wav");
+        assert!((back.takes["take1"].gain - 0.9).abs() < 1e-6);
+        assert_eq!(back.takes["take1"].label, "テイク1");
+    }
+
+    #[test]
+    fn an_absolute_take_path_is_refused() {
+        // 他人の機械で開けなくなる。保存はできても読まない
+        let d = tmpdir("takeabs");
+        let s = Store::new(&d, "example");
+        let mut p = Project::new("example");
+        for bad in ["C:/tmp/a.wav", "/tmp/a.wav"] {
+            p.takes.insert(
+                bad.into(),
+                AudioTrack {
+                    path: bad.into(),
+                    gain: 1.0,
+                    label: String::new(),
+                    color: String::new(),
+                },
+            );
+        }
+        s.save(&p).unwrap();
+        let back = s.load().unwrap().unwrap();
+        assert!(back.takes.is_empty(), "絶対パスを読んでしまった");
     }
 
     #[test]

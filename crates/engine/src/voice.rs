@@ -179,6 +179,8 @@ pub enum Msg {
     /// トラックごとの尖り止めの閾値 `(始まり, 天井)`。パートの順に並ぶ。
     /// 曲まるごとの実効値から決まるので、裏で測ってから届く
     Trim(Vec<Option<(f32, f32)>>),
+    /// 外で録った音（`AUDIO_TRACKS`）。曲の 0 秒から始まっている前提
+    Audio(std::sync::Arc<Vec<crate::mixer::Track>>),
 }
 
 #[cfg(test)]

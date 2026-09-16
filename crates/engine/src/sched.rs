@@ -67,6 +67,8 @@ pub enum Cmd {
     Off { part: String, pitch: i32 },
     /// 鍵を押した（離すまで作り足す）
     Press { part: String, pitch: i32, vel: u8 },
+    /// 外で録った音を差し替える
+    Audio(Arc<Vec<crate::mixer::Track>>),
     Quit,
     /// 音圧と尖り止めを測り終えた（裏の測定係から戻ってくる）
     Measured { makeup: f32, trim: Vec<Option<(f32, f32)>> },
@@ -429,6 +431,7 @@ pub(crate) fn spawn(
                     Ok(Cmd::Live { part, pitch, vel, secs }) => s.live(&part, pitch, vel, secs),
                     Ok(Cmd::Off { part, pitch }) => s.lift(&part, pitch),
                     Ok(Cmd::Press { part, pitch, vel }) => s.press(&part, pitch, vel),
+                    Ok(Cmd::Audio(a)) => s.send(Msg::Audio(a)),
                     Ok(Cmd::Measured { makeup, trim }) => s.measured(makeup, trim),
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 }

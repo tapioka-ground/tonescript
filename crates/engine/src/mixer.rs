@@ -155,6 +155,18 @@ impl Duck {
     }
 }
 
+/// 外で録った音1本。歌や、その場で録ったもの。
+///
+/// 譜面ではなく波形をそのまま鳴らす。伴奏側のサイドチェインも尖り止めも
+/// 掛けない（外で既に整っているものへ二重に掛けると割れる）。
+#[derive(Clone, Debug)]
+pub struct Track {
+    pub label: String,
+    pub l: std::sync::Arc<Vec<f32>>,
+    pub r: std::sync::Arc<Vec<f32>>,
+    pub gain: f32,
+}
+
 /// パート1つぶんの、そのブロックでの値。
 #[derive(Clone, Copy, Default)]
 struct Lanes {
@@ -195,6 +207,8 @@ pub struct Mixer {
     /// パートごとの尖り止め `(始まり, 天井)`。裏で測ってから届く。
     /// [`tonescript_render::mix::tame_crest`] と同じ形を、同じ閾値で掛ける
     trim: Vec<Option<(f32, f32)>>,
+    /// 外で録った音
+    audio: std::sync::Arc<Vec<Track>>,
     /// いま鳴っている音の数（画面に出す）
     live: Arc<AtomicU64>,
     /// 針
@@ -232,6 +246,7 @@ impl Mixer {
             rv_left: 0,
             clock: 0,
             trim: Vec::new(),
+            audio: std::sync::Arc::new(Vec::new()),
             live,
             meters,
             loudness: crate::meter::Loudness::new(),
@@ -287,6 +302,7 @@ impl Mixer {
                 }
                 Msg::Kick(at) => self.duck.push(at),
                 Msg::Trim(t) => self.trim = t,
+                Msg::Audio(a) => self.audio = a,
                 Msg::Cut { part, pitch, at } => {
                     for v in self.voices.iter_mut() {
                         // 新しく足したぶんより前のものだけを終わらせる
@@ -470,6 +486,23 @@ impl Mixer {
                 out_r[i] += rr;
             }
             self.rv_left = self.rv_left.saturating_sub(n as u64);
+        }
+
+        // 外で録った音。譜面のパートより後に足す。
+        // 伴奏側のサイドチェインや尖り止めは掛けない
+        if play && !self.audio.is_empty() {
+            let audio = self.audio.clone();
+            for t in audio.iter() {
+                if t.gain <= 0.0 {
+                    continue;
+                }
+                let from = pos as usize;
+                let take = t.l.len().min(t.r.len()).saturating_sub(from).min(n);
+                for i in 0..take {
+                    out_l[i] += t.l[from + i] * t.gain;
+                    out_r[i] += t.r[from + i] * t.gain;
+                }
+            }
         }
 
         // 音圧と天井

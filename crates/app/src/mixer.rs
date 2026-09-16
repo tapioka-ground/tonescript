@@ -41,6 +41,11 @@ pub struct Needles {
     master_hold: (f32, f32),
 }
 
+/// 針を落とす。上がりは即、下がりは緩やか。録音の入力にも使う。
+pub fn fall(now: f32, was: f32, dt: f32) -> f32 {
+    Needles::step(now, was, dt)
+}
+
 impl Needles {
     /// 針を進める。`dt` は前のフレームからの秒数。
     fn step(now: f32, was: f32, dt: f32) -> f32 {
@@ -114,7 +119,7 @@ fn db_of(v: f32) -> f32 {
 }
 
 /// -60〜+6 dB を 0〜1 へ。
-fn bar_of(v: f32) -> f32 {
+pub fn bar_of(v: f32) -> f32 {
     ((db_of(v) + 60.0) / 66.0).clamp(0.0, 1.0)
 }
 

@@ -45,7 +45,7 @@ use tonescript_render::Score;
 use tonescript_song::Song;
 
 pub use meter::Meters;
-pub use mixer::{Mixer, Shared};
+pub use mixer::{Mixer, Shared, Track};
 pub use plan::Plan;
 
 use sched::Cmd;
@@ -246,6 +246,12 @@ impl Engine {
         if let Some(i) = self.plan.part_of(part) {
             self.tweak(|p| p.parts[i].gain = gain.clamp(0.0, 8.0));
         }
+    }
+
+    /// 外で録った音を差し替える。読むのは画面側の仕事
+    /// （読み込みは重いし、失敗したら人に言わないといけない）。
+    pub fn set_audio(&self, tracks: Vec<Track>) {
+        let _ = self.cmd.send(Cmd::Audio(Arc::new(tracks)));
     }
 
     /// 手で触ったぶんの音量とミックスを、まとめて反映する。

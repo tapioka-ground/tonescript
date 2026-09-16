@@ -321,6 +321,94 @@ fn a_loop_keeps_coming_back() {
 }
 
 #[test]
+fn recorded_audio_plays_and_stops_with_the_transport() {
+    use std::sync::Arc as A;
+    let (s, sc) = song();
+    let (mut e, mut m) = Engine::new();
+    e.set_song(s, sc);
+    std::thread::sleep(Duration::from_millis(80));
+    // 譜面のほうは黙らせる。外で録った音だけを見る
+    for p in ["lead", "bass", "drums", "perc"] {
+        e.set_audible(p, false);
+    }
+    e.set_master_gain(1.0);
+
+    let n = (2.0 * SR) as usize;
+    let tone: Vec<f32> =
+        (0..n).map(|i| 0.2 * (i as f32 * std::f32::consts::TAU * 440.0 / SR).sin()).collect();
+    let track = |gain: f32, buf: &Vec<f32>| tonescript_engine::Track {
+        label: "歌".into(),
+        l: A::new(buf.clone()),
+        r: A::new(buf.clone()),
+        gain,
+    };
+
+    // まだ足していない。黙っているはず
+    e.play();
+    let (none, _) = pull(&mut m, 10, 1024, Duration::from_millis(2));
+    assert!(peak(&none) < 1e-4, "譜面を黙らせたのに鳴っている: {}", peak(&none));
+
+    // 足すと鳴る
+    e.stop();
+    e.seek(0);
+    e.set_audio(vec![track(1.0, &tone)]);
+    std::thread::sleep(Duration::from_millis(40));
+    e.play();
+    let (with, _) = pull(&mut m, 10, 1024, Duration::from_millis(2));
+    assert!(peak(&with) > 0.05, "足した音が鳴っていない: {}", peak(&with));
+
+    // 止めれば歌も止まる
+    e.stop();
+    let (quiet, _) = pull(&mut m, 4, 1024, Duration::from_millis(2));
+    assert_eq!(peak(&quiet), 0.0, "止めたのに歌だけ鳴っている");
+
+    // 音量 0 なら鳴らない
+    e.seek(0);
+    e.set_audio(vec![track(0.0, &tone)]);
+    std::thread::sleep(Duration::from_millis(40));
+    e.play();
+    let (zero, _) = pull(&mut m, 10, 1024, Duration::from_millis(2));
+    assert!(peak(&zero) < 1e-4, "音量 0 にしたのに鳴っている: {}", peak(&zero));
+}
+
+#[test]
+fn recorded_audio_lines_up_with_the_song() {
+    use std::sync::Arc as A;
+    let (s, sc) = song();
+    let (mut e, mut m) = Engine::new();
+    e.set_song(s, sc);
+    std::thread::sleep(Duration::from_millis(80));
+    for p in ["lead", "bass", "drums", "perc"] {
+        e.set_audible(p, false);
+    }
+    // 頭の 0.5 秒は無音、そのあとだけ鳴る音を用意する
+    let quiet = (0.5 * SR) as usize;
+    let mut buf = vec![0.0f32; quiet];
+    buf.extend((0..(1.0 * SR) as usize).map(|i| 0.3 * (i as f32 * 0.05).sin()));
+    e.set_audio(vec![tonescript_engine::Track {
+        label: "歌".into(),
+        l: A::new(buf.clone()),
+        r: A::new(buf),
+        gain: 1.0,
+    }]);
+    std::thread::sleep(Duration::from_millis(40));
+
+    // 0.7 秒目から鳴らす。頭出しした所の中身が出ること
+    e.seek((0.7 * SR) as u64);
+    e.play();
+    let (l, _) = pull(&mut m, 8, 1024, Duration::from_millis(2));
+    assert!(peak(&l) > 0.05, "頭出しした所の音が出ていない");
+
+    // 0.1 秒目からなら、まだ無音の所
+    e.stop();
+    e.seek((0.1 * SR) as u64);
+    e.play();
+    let (early, _) = pull(&mut m, 4, 1024, Duration::from_millis(2));
+    assert!(early.len() < quiet, "測る範囲が無音より長い");
+    assert!(peak(&early) < 1e-4, "無音のはずの所で鳴った: {}", peak(&early));
+}
+
+#[test]
 fn the_meters_say_what_actually_came_out() {
     let (s, sc) = song();
     let (mut e, mut m) = Engine::new();

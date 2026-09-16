@@ -140,7 +140,7 @@ impl Default for MixCfg {
 }
 
 /// 音声そのものを置くトラック（外の歌声ソフトで作った WAV）。
-#[derive(Clone, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub struct AudioTrack {
     /// TONESCRIPT_ROOT からの相対パス
     pub path: String,
