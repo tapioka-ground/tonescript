@@ -1,21 +1,20 @@
-# 曲ファイルの書き方
+# The song file
 
-`songs/*.rhai` の全仕様。**こう書けばこう鳴る**を1か所にまとめてある。
+Full spec for `songs/*.rhai`. Write one by hand, or hand this file to an AI
+(Claude Code, ChatGPT) and let it write one.
 
-人が手で書いてもいいし、AI（Claude Code / ChatGPT など）にこの文書を渡して
-書かせてもいい。そのために、思わせぶりな言い方を避けて、値の形と範囲と
-既定値を全部書いてある。
+日本語版は [SONGFILE.ja.md](SONGFILE.ja.md)。
 
-確かめ方:
+Check your work:
 
 ```
-tone check <曲名>      読めるか、何ノートになるかを見る
-tone render <曲名>     音にする
+tone check  <song>    does it load, how many notes per part
+tone render <song>    make the WAV
 ```
 
 ---
 
-## 0. 30秒で分かる最小の曲
+## 0. The smallest song
 
 ```rhai
 let BPM = 120;
@@ -28,34 +27,33 @@ let MELODY = #{
 let ARRANGE = #{ "1": ["lead"], "2": ["lead"] };
 ```
 
-これで「ド・ミ・ソー、ドー」がピアノで鳴る。必須は `BPM` `SECTIONS`
-`VOICES` の3つだけ。他は全部省略できる。
+C, E, G, C on a piano. Only `BPM`, `SECTIONS` and `VOICES` are required.
 
 ---
 
-## 1. いちばん大事な決まり
+## 1. Rules that matter most
 
-### 単位は「16分音符いくつ分」
+### The unit is one sixteenth note
 
-位置も長さも、すべて16分音符を1目盛りとして数える。これを**目盛り**と呼ぶ。
+Every position and length is counted in sixteenths. Call it a **step**.
 
-| 音符 | 目盛り |
+| Note | Steps |
 |---|---|
-| 16分 | 1 |
-| 8分 | 2 |
-| 付点8分 | 3 |
-| 4分 | 4 |
-| 付点4分 | 6 |
-| 2分 | 8 |
-| 全音符（4/4の1小節） | 16 |
+| 16th | 1 |
+| 8th | 2 |
+| dotted 8th | 3 |
+| quarter | 4 |
+| dotted quarter | 6 |
+| half | 8 |
+| whole (one 4/4 bar) | 16 |
 
-### 1小節が何目盛りかは拍子で変わる
+### Steps per bar depend on the meter
 
 ```
-1小節の目盛り = 分子 × 16 ÷ 分母
+steps per bar = numerator × 16 ÷ denominator
 ```
 
-| 拍子 | 1小節 | 1拍 |
+| Meter | Bar | Beat |
 |---|---|---|
 | 4/4 | 16 | 4 |
 | 3/4 | 12 | 4 |
@@ -65,170 +63,168 @@ let ARRANGE = #{ "1": ["lead"], "2": ["lead"] };
 | 7/8 | 14 | 2 |
 | 12/8 | 24 | 2 |
 
-**BPM は「拍」を数える。** 6/8 で BPM 120 と書いたら、8分音符が1分間に
-120個という意味になる。
+**BPM counts beats.** In 6/8, BPM 120 means 120 eighth notes per minute.
 
-### 位置は「曲の頭からの通し」ではなく「小節番号」で指す
+### Positions are bar numbers, not offsets
 
-`MELODY` や `CHORDS` は小節番号（1から数える）を鍵にした表で書く。
-曲の頭から何目盛り目か、を自分で数える必要はない。
+`MELODY` and `CHORDS` are maps keyed by bar number, counting from 1.
+You never count steps from the start of the song. The one exception is
+`AUTOMATION`, which uses absolute steps.
 
-例外は `AUTOMATION` だけで、あれは通しの目盛りで指す。
+### Rhai gotchas
 
-### Rhai の書き方の注意
-
-- 日本語を鍵に使うときは引用符が要る: `#{ "イントロ": ... }`
-- 表の鍵に数を使うときも引用符: `#{ "1": ..., "2": ... }`
-- `_` は変数名に使えない。`for _round in ...` のように名前を付ける
-- 配列の長さは `arr.len()`（`arr.len` ではない）
+- Quote non-ASCII keys: `#{ "イントロ": ... }`
+- Quote numeric keys too: `#{ "1": ..., "2": ... }`
+- `_` is not a variable name. Write `for _round in ...`
+- Array length is `arr.len()`, not `arr.len`
 
 ---
 
-## 2. 使える小道具
+## 2. Helpers
 
-曲ファイルの中でだけ使える関数が3つある。
+Three functions exist inside a song file.
 
-### `bar([[長さ, 音名], ...])`
+### `bar([[len, name], ...])`
 
-1小節ぶんの旋律を組み立てる。**合計が1小節ぶんでなければ読み込みで止まる。**
-書き間違いが、鳴らす前に見つかる。
+Builds one bar of melody. **The lengths must add up to exactly one bar**,
+or loading stops. Mistakes surface before you hear them.
 
 ```rhai
-bar([[4, "C4"], [4, "E4"], [8, "G4"]])   // 4+4+8 = 16。4/4 なら OK
+bar([[4, "C4"], [4, "E4"], [8, "G4"]])   // 4+4+8 = 16, fine in 4/4
 ```
 
-休符は音名を `"rest"` にする。
+Use `"rest"` as the name for a rest.
 
 ```rhai
 bar([[4, "C4"], [4, "rest"], [8, "G4"]])
 ```
 
-`bar()` を使わず、生の配列 `[[4, "C4"], ...]` で書いてもいい。
-どちらでも合計は検算される（拍子に合わせて）。
+A raw array `[[4, "C4"], ...]` works too. Either way the sum is checked
+against the meter.
 
 ### `note("A4")`
 
-音名を MIDI ノート番号にする。`A4` = 69、`C4` = 60。
-`#` と `b` が使える（`C#4` も `Db4` も同じ 61）。
+Note name to MIDI number. `A4` = 69, `C4` = 60. `#` and `b` both work
+(`C#4` and `Db4` are both 61).
 
-### `steps(始め, 終わり, 刻み)`
+### `steps(from, to, by)`
 
-Python の `range` と同じ。終わりは含まない。
+Same as Python's `range`. The end is excluded.
 
 ```rhai
 for i in steps(0, 16, 2) { ... }   // 0, 2, 4, 6, 8, 10, 12, 14
 ```
 
-**これが .rhai をデータ形式にしなかった理由。** 「2つおきに置く」が
-1行で書ける。データで書くと数字の羅列になって、何をしたかったのかが読めない。
+**This is why the song file is a script and not a data format.** "Every
+other step" is one line. As data it would be a wall of numbers with the
+intent lost.
 
 ---
 
-## 3. 必ず書くもの
+## 3. Required
 
-### `BPM`（数）
+### `BPM` (number)
 
-曲の速さ。**20〜400**。範囲外は読み込みで弾かれる。
+Tempo, **20–400**. Out of range is refused at load.
 
-### `SECTIONS`（配列）
+### `SECTIONS` (array)
 
-曲の骨組み。上から順に並ぶ。
+The skeleton, in order.
 
 ```rhai
 let SECTIONS = [
-    // [名前, 小節数, ベース型, ドラムキット, リフ型, 音量, 拍子]
-    ["イントロ", 8, "plain", "light", "main", 0.85],
-    ["サビ",     8, "octa",  "full",  "high", 1.00],
-    ["間奏",     4, "plain", "light", "main", 0.90, [7, 8]],
+    // [name, bars, bass pattern, drum kit, arp pattern, gain, meter]
+    ["Intro",  8, "plain", "light", "main", 0.85],
+    ["Chorus", 8, "octa",  "full",  "high", 1.00],
+    ["Break",  4, "plain", "light", "main", 0.90, [7, 8]],
 ];
 ```
 
-| 位置 | 中身 | 範囲 |
+| # | Meaning | Range |
 |---|---|---|
-| 1 | 名前（文字列） | `SECTION_PATCH` などから引くので、ここと綴りを揃える |
-| 2 | 小節数 | 1〜512 |
-| 3 | ベース型の名前 | `BASS_PATTERNS` に書いた名前 |
-| 4 | ドラムキットの名前 | `DRUM_KITS` に書いた名前 |
-| 5 | リフ型の名前 | `ARP_PATTERNS` に書いた名前 |
-| 6 | ベロシティ倍率 | だいたい 0.6〜1.2。強さ全体に掛かる |
-| 7 | 拍子 `[分子, 分母]`（**省略可**） | 分子 1〜32、分母は 1/2/4/8/16。省くと 4/4 |
+| 1 | Name (string) | `SECTION_PATCH` looks it up, so keep spellings identical |
+| 2 | Bars | 1–512 |
+| 3 | Bass pattern name | a key of `BASS_PATTERNS` |
+| 4 | Drum kit name | a key of `DRUM_KITS` |
+| 5 | Arp pattern name | a key of `ARP_PATTERNS` |
+| 6 | Velocity scale | roughly 0.6–1.2 |
+| 7 | Meter `[num, den]` (**optional**) | num 1–32, den 1/2/4/8/16. Omitted = 4/4 |
 
-型やキットの名前が `BASS_PATTERNS` などに無いと、**そのパートは黙る**
-（エラーにはならない）。鳴らないときはまずここを疑う。
+A name that isn't in `BASS_PATTERNS` etc. makes **that part silent** — it
+is not an error. When something doesn't sound, check here first.
 
-### `VOICES`（表）
+### `VOICES` (map)
 
-パートごとの音色。
+One entry per part.
 
 ```rhai
 let VOICES = #{
-    lead:   #{ ch: 0, patch: "supersaw", program: 81, volume: 100,
-               label: "主旋律", color: "#ff9f43" },
-    drums:  #{ ch: 9, volume: 112, label: "ドラム", color: "#fd79a8" },
+    lead:  #{ ch: 0, patch: "supersaw", program: 81, volume: 100,
+              label: "Lead", color: "#ff9f43" },
+    drums: #{ ch: 9, volume: 112, label: "Drums", color: "#fd79a8" },
 };
 ```
 
-| 鍵 | 中身 | 省略時 |
+| Key | Meaning | Default |
 |---|---|---|
-| `ch` | MIDI チャンネル 0〜15。**9 は打楽器** | 必須 |
-| `patch` | 自作シンセの音色名（46種。§9） | 無し＝音が出ない |
-| `program` | GM 音源の番号 0〜127。MIDI 書き出しに使う | 送らない |
-| `volume` | 0〜127 | 100 |
-| `label` | 画面と MIDI に出る名前 | パート名 |
-| `color` | `#rrggbb` | 灰色 |
+| `ch` | MIDI channel 0–15. **9 is percussion** | required |
+| `patch` | synth instrument name (46 of them, §9) | none = silent |
+| `program` | GM program 0–127, used for MIDI export | not sent |
+| `volume` | 0–127 | 100 |
+| `label` | shown in the window and in MIDI | the part name |
+| `color` | `#rrggbb` | grey |
 
-**パート名には決まったものがある。** 下の名前にしないと自動生成が効かない。
+**Part names are fixed.** Generation only happens for these names.
 
-| パート | 何が鳴るか |
+| Part | What it plays |
 |---|---|
 | `lead` | `MELODY` |
-| `bass` | `CHORDS` の低音 × `BASS_PATTERNS` |
-| `sub` | `CHORDS` の低音の1オクターブ下。1小節まるごと伸ばす |
-| `arp` | `CHORDS` の構成音 × `ARP_PATTERNS` |
-| `chords` | `CHORDS` の構成音 × `CHORD_PATTERN` |
-| `drums` | `DRUM_KITS` と `EXTRA_HITS` |
-| `perc` | 同上のうち金物（`closedhat` `openhat` `shaker` `ride` `crash` `reverse`） |
-| `vocal` | 何も自動生成しない。画面で描くか MIDI から入れる |
-| `fx` | 同上 |
+| `bass` | `CHORDS` root × `BASS_PATTERNS` |
+| `sub` | `CHORDS` root an octave down, held for the whole bar |
+| `arp` | `CHORDS` tones × `ARP_PATTERNS` |
+| `chords` | `CHORDS` tones × `CHORD_PATTERN` |
+| `drums` | `DRUM_KITS` and `EXTRA_HITS` |
+| `perc` | the metal of those (`closedhat` `openhat` `shaker` `ride` `crash` `reverse`) |
+| `vocal` | nothing generated. Draw it in the window or import MIDI |
+| `fx` | same |
 
 ---
 
-## 4. 音を決めるもの
+## 4. The notes
 
-### `MELODY` — 主旋律
+### `MELODY` — the tune
 
-小節番号 → その小節の旋律。`lead` が鳴らす。
+Bar number → that bar's melody. `lead` plays it.
 
 ```rhai
 let MELODY = #{
     "1": bar([[3, "A5"], [1, "A5"], [2, "E5"], [2, "A5"], [4, "C6"], [4, "B5"]]),
-    "2": bar([[16, "rest"]]),                      // 1小節まるごと休み
-    "3": bar([[4, "C5", "ら"], [12, "E5", "らー"]]), // 3つめは歌詞（省略可）
+    "2": bar([[16, "rest"]]),                      // a whole bar of silence
+    "3": bar([[4, "C5", "la"], [12, "E5", "laa"]]), // 3rd item = lyric (optional)
 };
 ```
 
-- 合計は**その小節の目盛り数**ちょうど。違うと読み込みで止まり、
-  `3小節目の旋律の合計が 16/12 です（拍子 3/4）` のように言われる
-- 曲の小節数を超える小節に書いても止まる
-- 強さは 108 を基準に、セクションの音量と `BAR_ACCENT` が掛かる
+- The sum must equal **that bar's step count**. Otherwise loading stops with
+  something like `bar 3: melody sums to 16/12 (meter 3/4)`
+- A bar number past the end of the song also stops loading
+- Velocity starts at 108, then section gain and `BAR_ACCENT` multiply it
 
-**書いた通りの音程がそのまま出る。** 移調も和音への吸着もしない
-（`TRANSPOSE` を書いたときだけ移調する）。
+**You get the pitches you wrote.** Nothing is transposed or snapped to a
+chord (only `TRANSPOSE` moves anything).
 
-### `CHORDS` — 和音
+### `CHORDS` — harmony
 
-小節番号 → 和音。`bass` `sub` `arp` `chords` の材料になる。
+Bar number → chord. Feeds `bass`, `sub`, `arp` and `chords`.
 
 ```rhai
 let Am = ["Am", ["A3", "C4", "E4"], "A2"];
-//         ↑表示名  ↑構成音（上物が使う）  ↑低音（bass と sub が使う）
+//         name   tones (upper parts)   root (bass and sub)
 let CHORDS = #{ "1": Am, "2": Am };
 ```
 
-構成音は何個でもいい（3つでも4つでも）。`arp` は「何番目の音か」で
-引くので、順番に意味がある。
+Any number of tones. `arp` picks them by index, so the order matters.
 
-進行を回すときは `steps` を使う:
+To loop a progression, use `steps`:
 
 ```rhai
 let prog = [Am, F, C, G];
@@ -238,24 +234,25 @@ for i in steps(0, 16, 1) {
 }
 ```
 
-### `ARRANGE` — どの小節で何を鳴らすか
+### `ARRANGE` — what plays in which bar
 
-小節番号 → 鳴らすパートの配列。**ここに無いパートはその小節で黙る。**
+Bar number → array of parts. **A part not listed is silent in that bar.**
 
 ```rhai
 let ARRANGE = #{
-    "1": ["lead"],                                  // 旋律だけ
+    "1": ["lead"],
     "2": ["lead", "arp"],
     "3": ["lead", "arp", "bass", "sub", "kick", "closedhat"],
 };
 ```
 
-ドラムは**パートではなく打点の名前**で指す（`kick` `clap` `closedhat`
-`openhat` `shaker` `rim` など、`DRUM_KITS` に書いた名前）。
+Drums go in by **hit name, not part name** (`kick`, `clap`, `closedhat`,
+`openhat`, `shaker`, `rim` — whatever you named in `DRUM_KITS`).
 
-`ARRANGE` を書かないと**何も鳴らない**。これが「音が出ない」で一番多い原因。
+**No `ARRANGE` means no sound at all.** This is the number one cause of
+silence.
 
-盛り上がりは「だんだん増やす」で作る:
+Build energy by adding parts:
 
 ```rhai
 let full = ["lead", "chords", "bass", "sub", "arp",
@@ -272,32 +269,31 @@ for i in steps(6, 17, 1) { ARRANGE["" + i] = full; }
 
 ---
 
-## 5. 伴奏の型
+## 5. Accompaniment patterns
 
-### `BASS_PATTERNS` — ベースの刻み
+### `BASS_PATTERNS`
 
-名前 → `[位置, 長さ, ルートからの半音差]` の配列。1小節ぶんを書く。
+Name → array of `[pos, len, semitones from root]`. One bar's worth.
 
 ```rhai
 let BASS_PATTERNS = #{
-    // 4分で踏む
+    // on every quarter
     plain: [[0, 4, 0], [4, 4, 0], [8, 4, 0], [12, 4, 0]],
-    // 根音と1オクターブ上を同時に叩く
+    // root and octave together
     octa: [[0,2,0],[0,2,12],[2,2,0],[2,2,12],[4,2,0],[4,2,12],[6,2,0],[6,2,12],
            [8,2,0],[8,2,12],[10,2,0],[10,2,12],[12,2,0],[12,2,12],[14,2,0],[14,2,12]],
 };
 ```
 
-半音差は `CHORDS` の低音からの差。`12` で1オクターブ上、`7` で5度上、
-`-12` で1オクターブ下。強さの基準は 100。
+The offset is from the `CHORDS` root: `12` an octave up, `7` a fifth,
+`-12` an octave down. Velocity starts at 100.
 
-**拍子が短い小節でははみ出したぶんが落ちる。** 3/4（12目盛り）の小節に
-`[12, 4, 0]` を書いた型を当てると、その打点は入らない。次の小節へは
-食い込まない。
+**Hits past the end of a short bar are dropped.** In 3/4 (12 steps), a
+pattern with `[12, 4, 0]` loses that hit. Nothing spills into the next bar.
 
-### `ARP_PATTERNS` — リフ
+### `ARP_PATTERNS`
 
-名前 → `[位置, 長さ, 和音の何番目の音, 何オクターブ上]` の配列。
+Name → array of `[pos, len, which chord tone, octaves up]`.
 
 ```rhai
 let ARP_PATTERNS = #{
@@ -306,39 +302,39 @@ let ARP_PATTERNS = #{
 };
 ```
 
-「何番目の音」は `CHORDS` の構成音の添字（0 から）。構成音より大きい数を
-書いても落ちない（回り込む）。強さの基準は 92。
+"Which chord tone" indexes `CHORDS` tones from 0. An index past the end
+wraps rather than dropping. Velocity starts at 92.
 
-### `CHORD_PATTERN` — コードの刻み
+### `CHORD_PATTERN`
 
-`[位置, 長さ, 強さ]` の配列。**型の名前は無く、曲に1つだけ。**
-構成音を全部同時に鳴らす。
+Array of `[pos, len, velocity]`. **One per song, no names.** All chord
+tones at once.
 
 ```rhai
 let CHORD_PATTERN = [[2, 1, 84], [6, 1, 76], [10, 1, 84], [14, 1, 80]];
 ```
 
-裏拍（2, 6, 10, 14）に短く置くのが定番。
+Short hits on the offbeats (2, 6, 10, 14) is the usual move.
 
-### `sub` には型が要らない
+### `sub` needs no pattern
 
-`sub` は `ARRANGE` に入れるだけで、`CHORDS` の低音を1オクターブ下げて
-1小節まるごと伸ばす。強さの基準は 96。
+Put `sub` in `ARRANGE` and it takes the `CHORDS` root an octave down and
+holds it for the bar. Velocity starts at 96.
 
 ---
 
-## 6. ドラム
+## 6. Drums
 
 ### `DRUM_KITS`
 
-キット名 → 打点名 → `[MIDIノート番号, [[位置, 強さ], ...]]`
+Kit name → hit name → `[MIDI note, [[pos, velocity], ...]]`
 
 ```rhai
 let DRUM_KITS = #{
     light: #{
         kick:      [36, [[0,100],[4,100],[8,100],[12,100]]],
         closedhat: [42, [[2,52],[6,52],[10,52],[14,52]]],
-        clap:      [39, []],                      // 空でもいい
+        clap:      [39, []],                      // empty is fine
     },
     full: #{
         kick:      [36, [[0,126],[4,126],[8,126],[12,126]]],
@@ -348,26 +344,26 @@ let DRUM_KITS = #{
 };
 ```
 
-**MIDIノート番号で音が決まる。** 打点名は `ARRANGE` で指すための札で、
-音そのものは番号で選ばれる。
+**The MIDI note picks the sound.** The hit name is just a label for
+`ARRANGE` to point at.
 
-| 番号 | 音 |
+| Note | Sound |
 |---|---|
-| 35 | 歪んだキック（ハードスタイル） |
-| 36 | キック |
-| 37 | リムショット |
-| 38 | スネア |
-| 39 | クラップ |
-| 41 / 45 / 48 | タム（低 / 中 / 高） |
-| 42 | 閉じたハット |
-| 46 | 開いたハット |
-| 49 | クラッシュ |
-| 51 | ライド |
-| 52 | リバースシンバル |
-| 70 | シェイカー |
-| その他 | ハット |
+| 35 | distorted kick (hardstyle) |
+| 36 | kick |
+| 37 | rimshot |
+| 38 | snare |
+| 39 | clap |
+| 41 / 45 / 48 | tom (low / mid / high) |
+| 42 | closed hat |
+| 46 | open hat |
+| 49 | crash |
+| 51 | ride |
+| 52 | reverse cymbal |
+| 70 | shaker |
+| anything else | hat |
 
-### `EXTRA_HITS` — キットに依らない一発もの
+### `EXTRA_HITS` — one-offs outside the kit
 
 ```rhai
 let EXTRA_HITS = #{
@@ -376,90 +372,92 @@ let EXTRA_HITS = #{
 };
 ```
 
-`ARRANGE` にその名前を入れた小節で鳴る。
+They fire in bars where `ARRANGE` names them.
 
-### `drums` と `perc` の振り分け
+### How hits split between `drums` and `perc`
 
-打点名が `closedhat` `openhat` `shaker` `ride` `crash` `reverse` のものは
-`perc` レーンへ、それ以外は `drums` レーンへ入る。音量とミックスを
-別々にするため。`ARRANGE` には打点名を書けばよく、レーンは意識しなくていい。
+`closedhat`, `openhat`, `shaker`, `ride`, `crash` and `reverse` go to the
+`perc` lane; everything else to `drums`, so the two can be mixed apart.
+In `ARRANGE` you just write hit names — the lane is automatic.
 
 ---
 
-## 7. 変化を付ける
+## 7. Making it move
 
-### `TEMPO_MAP` — テンポの節目
+### `TEMPO_MAP`
 
-小節番号 → BPM。節目のあいだは連続で補間される。
+Bar number → BPM, interpolated in between.
 
 ```rhai
 let TEMPO_MAP = #{ "1": 150, "33": 174, "41": 190, "49": 190, "52": 154, "53": 150 };
-let TEMPO_CURVE = "smooth";   // "smooth"（既定）か "linear"
+let TEMPO_CURVE = "smooth";   // "smooth" (default) or "linear"
 ```
 
-- `smooth` は両端の傾きが 0 の曲線。そっと動き出してそっと収まる
-- `linear` は直線。着地で傾きが一段落ちるので「角」が出る
+- `smooth` is flat at both ends: it eases out and eases in
+- `linear` is a straight line, so the landing has a corner
 
-**急に止めるより、数小節かけて落とすほうが次の全開が効く。**
+**Dropping over a few bars beats stopping dead** — the next full section
+hits harder.
 
-### `TRANSPOSE` — 移調
+### `TRANSPOSE`
 
-小節番号 → 半音いくつ上げるか。**ドラムには掛からない。**
+Bar number → semitones up. **Drums are never transposed.**
 
 ```rhai
 let TRANSPOSE = #{};
-for i in steps(53, 69, 1) { TRANSPOSE["" + i] = 2; }   // ラスサビで全音上げ
+for i in steps(53, 69, 1) { TRANSPOSE["" + i] = 2; }   // last chorus up a tone
 ```
 
-### `BAR_ACCENT` — 小節ごとの強さ
+### `BAR_ACCENT`
 
-小節番号 → 倍率。8小節すべて同じ強さだと平らに聞こえる。
+Bar number → multiplier. Eight bars at one level sounds flat.
 
 ```rhai
 let BAR_ACCENT = #{
-    "9": 1.00, "10": 0.90, "11": 0.96, "12": 1.04,   // 一度引いて溜める
-    "13": 1.06, "14": 0.96, "15": 1.04, "16": 1.14,  // 開ける
+    "9": 1.00, "10": 0.90, "11": 0.96, "12": 1.04,   // pull back, build up
+    "13": 1.06, "14": 0.96, "15": 1.04, "16": 1.14,  // open up
 };
 ```
 
-### `SECTION_PATCH` / `LEAD_PATCH` — セクションで楽器を変える
+### `SECTION_PATCH` / `LEAD_PATCH`
 
 ```rhai
 let SECTION_PATCH = #{
-    "イントロ": #{ lead: "koto", arp: "koto", bass: "sub", chords: "strings" },
-    "サビ":     #{ lead: "hardlead", bass: "hardbass" },
+    "Intro":  #{ lead: "koto", arp: "koto", bass: "sub", chords: "strings" },
+    "Chorus": #{ lead: "hardlead", bass: "hardbass" },
 };
-let LEAD_PATCH = #{ "イントロ": "piano" };   // lead だけを変える近道
+let LEAD_PATCH = #{ "Intro": "piano" };   // shortcut for lead only
 ```
 
-優先順位は `SECTION_PATCH` → `LEAD_PATCH` → `VOICES.patch`。
+Priority: `SECTION_PATCH` → `LEAD_PATCH` → `VOICES.patch`.
 
-### `AUTOMATION` — 線で動かす
+### `AUTOMATION`
 
-パート → 動かすもの → `[[位置, 値], ...]`。**位置だけは通しの目盛りで書く**
-（小節ではない）。節と節のあいだは直線で繋ぐ。
+Part → lane → `[[pos, value], ...]`. **Positions here are absolute steps**,
+not bars. Straight lines between points.
 
 ```rhai
 let AUTOMATION = #{
     lead: #{
-        pan:  [[0, -1.0], [256, 1.0]],            // 左から右へ
-        gain: [[0, 1.0], [128, 1.0], [256, 0.25]], // 後半でフェード
+        pan:  [[0, -1.0], [256, 1.0]],             // left to right
+        gain: [[0, 1.0], [128, 1.0], [256, 0.25]], // fade out in the back half
     },
 };
 ```
 
-| 動かすもの | 範囲 | 既定 |
+| Lane | Range | Default |
 |---|---|---|
-| `gain` | 0〜8 | 1.0 |
-| `pan` | -1〜1（-1が左） | 0（中央） |
-| `reverb` | 0〜2 | `MIX` の値 |
-| `duck` | 0〜2 | `MIX` の値 |
+| `gain` | 0–8 | 1.0 |
+| `pan` | -1 to 1 (-1 is left) | 0 (centre) |
+| `reverb` | 0–2 | the `MIX` value |
+| `duck` | 0–2 | the `MIX` value |
 
-範囲外や曲の終わりより後の位置は読み込みで弾かれる。
+Out-of-range values, and positions past the end of the song, are refused
+at load.
 
 ---
 
-## 8. ミックスと仕上げ
+## 8. Mix and master
 
 ```rhai
 let GAINS = #{ lead: 1.55, chords: 1.60, bass: 0.90, arp: 1.00,
@@ -472,180 +470,181 @@ let MIX = #{
     drums:  #{ width: 0.45, reverb: 0.08, duck: 0.00 },
 };
 
-let SIDECHAIN = [0.70, 0.003, 0.020, 0.200];   // [深さ, アタック秒, 保持秒, 戻り秒]
+let SIDECHAIN = [0.70, 0.003, 0.020, 0.200];   // [depth, attack s, hold s, release s]
 let KICK = #{ weight: 1.15, body: 1.20, click: 0.85, length: 1.15, tail_hz: 78.0 };
-let REVERB = [1.9, 4.2];                        // [残響の秒数, 広がり]
-let MASTER_LUFS = -9.0;                         // 仕上がりの音圧
+let REVERB = [1.9, 4.2];                        // [seconds, spread]
+let MASTER_LUFS = -9.0;                         // final loudness
 let PREMIX_LUFS = -20.0;
 ```
 
-| `MIX` の鍵 | 意味 |
+| `MIX` key | Meaning |
 |---|---|
-| `width` | 左右の広がり。0 が完全中央。**低音を広げると芯がぼやける**ので `bass` と `sub` は 0 に |
-| `reverb` | 残響へ送る量。0 で送らない。0.2〜0.4 が目安 |
-| `duck` | サイドチェインの掛かり具合。キックのたびに凹む量 |
+| `width` | stereo width. 0 is dead centre. **Widening the low end blurs it**, so keep `bass` and `sub` at 0 |
+| `reverb` | send amount. 0 sends nothing. 0.2–0.4 is a normal range |
+| `duck` | how much the sidechain pushes this part down on every kick |
 
-### 残響の効かせ方
+### Using the reverb
 
-`REVERB` は `[秒数, 広がり]`。秒数は残りが消えるまでのおよその長さ
-（0.05〜20）、広がりは 0 で完全に中央、8 でいちばん開く。
+`REVERB` is `[seconds, spread]`. Seconds is roughly how long the tail takes
+to die (0.05–20); spread is 0 for dead centre, 8 for widest.
 
-**全パートが同じ部屋へ送る。** パートごとに別の残響を掛けるのではなく、
-1つの部屋へまとめて送って、戻ってきたぶんを足す。実際の部屋と同じ形で、
-そのほうが馴染む（別々に掛けると、パートごとに違う場所で鳴っているように
-聞こえる）。
+**Every part sends to the same room.** Rather than a separate reverb per
+part, one room takes the sends and its output is added back. That is how a
+real room works, and it sits better — separate reverbs make parts sound
+like they are in different places.
 
-送る量は `MIX` の `reverb` で決める。**0 なら1滴も送らない**ので、
-どのパートも 0 なら残響の計算自体が走らない。
+`MIX`'s `reverb` sets the send. **At 0 nothing is sent**, and if every part
+is 0 the reverb is never computed at all.
 
 ```rhai
 let REVERB = [2.5, 5.0];
 let MIX = #{
     lead:   #{ width: 1.35, reverb: 0.26, duck: 0.55 },
-    // 低音は送らない。残響を掛けると輪郭が消えて濁るだけ
+    // Don't send the low end. Reverb only smears its edge.
     bass:   #{ width: 0.00, reverb: 0.02, duck: 1.00 },
     sub:    #{ width: 0.00, reverb: 0.00, duck: 1.00 },
 };
 ```
 
-長い残響ほど高い音が先に消えるようにしてある。実際の部屋もそうなっている。
+The longer the tail, the sooner the highs fall out of it — as in a real room.
 
-`SIDECHAIN` は EDM の「ポンプ感」の正体。キックのたびに他を凹ませ、
-戻る途中で次のキックが来る。深く・戻りを長くするほどうねる。
+`SIDECHAIN` is what makes EDM pump: every kick pushes everything else down,
+and the next kick lands before it has recovered. Deeper and slower to
+recover means more swell.
 
-`MASTER_LUFS` の目安: 配信は -14、CD は -9 あたり。
+`MASTER_LUFS`: -14 for streaming, around -9 for CD.
 
-### `AUDIO_TRACKS` — 外で作った歌
+### `AUDIO_TRACKS` — vocals recorded elsewhere
 
 ```rhai
 let AUDIO_TRACKS = #{
-    main:    #{ path: "Vocal/main.wav",    gain: 1.00, label: "メイン" },
-    double:  #{ path: "Vocal/double.wav",  gain: 0.85, label: "重ね" },
-    harmony: #{ path: "Vocal/harmony.wav", gain: 0.42, label: "ハモリ" },
+    main:    #{ path: "Vocal/main.wav",    gain: 1.00, label: "Main" },
+    double:  #{ path: "Vocal/double.wav",  gain: 0.85, label: "Double" },
+    harmony: #{ path: "Vocal/harmony.wav", gain: 0.42, label: "Harmony" },
 };
 ```
 
-- パスは `TONESCRIPT_ROOT` からの**相対**。絶対パスは読み込みで弾く
-- **48kHz・16bit・ステレオかモノラル**。違うとエラー
-- 曲の 0 秒から始まっている前提。頭は詰めない
-- 同じパートの別テイクを重ねると**ダブリング**になって太くなる
-- 使わないものは `gain: 0.0` にする
-- 歌には伴奏側のサイドチェインも尖り制限も掛からない
+- Paths are **relative** to `TONESCRIPT_ROOT`. Absolute paths are refused
+- **48kHz, 16-bit, mono or stereo.** Anything else is an error
+- Assumed to start at 0s. Nothing is trimmed
+- Layering two takes of the same part is doubling, and it thickens
+- Set `gain: 0.0` for a track you aren't using
+- Vocals get neither the sidechain nor the crest limiter
 
 ### `SCALE` / `SCALE_ROOT`
 
-音階。平行声部を作るときに使う（主音からの半音）。
+The scale, in semitones from the root. Used when building parallel parts.
 
 ```rhai
-let SCALE = [0, 2, 3, 5, 7, 8, 10];   // 自然短音階
-let SCALE_ROOT = 9;                    // A のピッチクラス（C=0, A=9）
+let SCALE = [0, 2, 3, 5, 7, 8, 10];   // natural minor
+let SCALE_ROOT = 9;                    // A (C=0, A=9)
 ```
 
 ---
 
-## 9. 使える音色 46 種
+## 9. The 46 instruments
 
-`tone patches` で一覧が出る。
+`tone patches` prints them.
 
-| 系統 | 名前 |
+| Family | Names |
 |---|---|
-| リード | `supersaw` `hardlead` `brightsaw` `squarelead` `pluck` `stab` `crystal` `brass` |
-| 鍵盤・弦 | `piano` `harpsi` `organ` `strings` `choir` |
-| ベース | `acid` `sub` `reese` `fmbass` `donk` `808` `growl` `hardbass` `fingerbass` `upright` `rumble` `wobble` |
-| 打・金属 | `bell` `steelpan` `marimba` `kalimba` `gamelan` `santur` |
-| 和・アジア | `koto` `shamisen` `shakuhachi` `sinobue` `erhu` |
-| 笛・管 | `flute` `quena` `bansuri` `ocarina` `whistle` `panflute` `duduk` `didge` |
-| 撥弦 | `sitar` `oud` |
+| Lead | `supersaw` `hardlead` `brightsaw` `squarelead` `pluck` `stab` `crystal` `brass` |
+| Keys, strings | `piano` `harpsi` `organ` `strings` `choir` |
+| Bass | `acid` `sub` `reese` `fmbass` `donk` `808` `growl` `hardbass` `fingerbass` `upright` `rumble` `wobble` |
+| Tuned percussion | `bell` `steelpan` `marimba` `kalimba` `gamelan` `santur` |
+| East Asian | `koto` `shamisen` `shakuhachi` `sinobue` `erhu` |
+| Winds | `flute` `quena` `bansuri` `ocarina` `whistle` `panflute` `duduk` `didge` |
+| Plucked | `sitar` `oud` |
 
-選び方の目安:
+Rough guidance:
 
-- **速い曲の主旋律** — `supersaw` `hardlead` `brightsaw`。倍音が多くて抜ける
-- **静かな所** — `piano` `crystal` `strings`。`crystal` は伸ばすと澄む
-- **低音の土台** — `sub`（40〜90Hz を支える）。その上で `acid` や `reese` が刻む
-- **和風** — `koto`（撥弦で粒が立つ）`shakuhachi`（息が主役）`shamisen`（サワリのビビり）
-- **息もの** — 立ち上がりが遅い。速い刻みには向かない
+- **Fast lead** — `supersaw`, `hardlead`, `brightsaw`. Rich enough to cut through
+- **Quiet passages** — `piano`, `crystal`, `strings`. `crystal` clears as it sustains
+- **Low end** — `sub` holds 40–90Hz while `acid` or `reese` moves on top
+- **Japanese** — `koto` (plucked, distinct attack), `shakuhachi` (breath is the point), `shamisen` (buzzing sawari)
+- **Breath instruments** are slow to start. Not for fast passages
 
-音色によっては**余韻**が付く（音価より長く鳴る）。`gamelan` は 1.6 秒、
-`piano` は 0.42 秒、`808` は 0.70 秒。刻んだときに繋がって聞こえるのはこれ。
+Some instruments **ring past the note length**: `gamelan` 1.6s, `piano`
+0.42s, `808` 0.70s. That's why fast passages on them run together.
 
 ---
 
-## 10. よくある詰まり
+## 10. Common traps
 
-| 症状 | 原因 |
+| Symptom | Cause |
 |---|---|
-| **音が出ない** | `ARRANGE` にそのパートを入れていない |
-| ベース／リフが鳴らない | `SECTIONS` の型名が `BASS_PATTERNS` などに無い |
-| 旋律が鳴らない | `ARRANGE` に `lead` が無い。または `MELODY` の小節番号が曲の外 |
-| 読み込みで止まる | 旋律の合計が1小節ぶんでない。メッセージに `16/12` のように出る |
-| 3/4 なのに4拍鳴る | 型が 4/4 前提。はみ出したぶんは落ちるので、拍子に合わせて書く |
-| ドラムが変な音 | 打点名ではなく **MIDIノート番号**で音が決まる |
-| 日本語の鍵でエラー | 引用符が要る。`#{ "イントロ": ... }` |
-| 速さを変えたのに変わらない | `BPM` だけ直して `TEMPO_MAP` が古い |
-| 歌が読めない | 48kHz 16bit でない。絶対パスを書いている |
+| **No sound** | the part isn't in `ARRANGE` |
+| bass/arp silent | the `SECTIONS` pattern name isn't in `BASS_PATTERNS` etc. |
+| melody silent | no `lead` in `ARRANGE`, or a `MELODY` bar past the end |
+| loading stops | a melody bar doesn't sum to one bar. The message shows e.g. `16/12` |
+| 4 beats in 3/4 | the pattern assumes 4/4. Hits past the bar are dropped |
+| wrong drum sound | the **MIDI note** picks the sound, not the hit name |
+| error on a non-ASCII key | it needs quotes: `#{ "イントロ": ... }` |
+| tempo change did nothing | you edited `BPM` but left `TEMPO_MAP` alone |
+| vocal won't load | not 48kHz/16-bit, or the path is absolute |
 
 ---
 
-## 11. AI に書かせるときの渡し方
+## 11. Handing this to an AI
 
-この文書をそのまま渡して、こう頼めばいい。
+Give it this file and ask:
 
-> `SONGFILE.md` の仕様に従って `songs/<名前>.rhai` を書いて。
-> 〈どんな曲にしたいか〉
+> Follow the spec in `SONGFILE.md` and write `songs/<name>.rhai`.
+> \<what you want the song to be\>
 
-書かせたあと、必ずこれで確かめる:
+Then always check:
 
 ```
-tone check <名前>     読めるか、各パート何ノートになるか
-tone render <名前>    実際に音にする
+tone check  <name>    does it load, how many notes per part
+tone render <name>    make the WAV
 ```
 
-`check` が通れば、少なくとも**曲として破綻していない**ことは保証される
-（旋律の合計、小節の範囲、値の範囲は読み込みで全部検算される）。
+If `check` passes, the song is at least structurally sound — bar sums, bar
+ranges and value ranges are all verified at load.
 
-AI に伝えておくと良い点:
+Worth telling the AI up front:
 
-- 必須は `BPM` `SECTIONS` `VOICES` の3つだけ。凝る前にまずこれで通す
-- `ARRANGE` を書き忘れると**何も鳴らない**
-- 旋律の合計は必ず1小節ぶん。`bar()` を使えば書き間違いがその場で出る
-- 拍子を変えたら、伴奏の型も拍子に合わせて書き直す
-- 音色名は46種のどれか。無い名前を書くと**そのパートが黙る**
+- Only `BPM`, `SECTIONS` and `VOICES` are required. Get those loading first
+- Forgetting `ARRANGE` means **nothing plays**
+- Every melody bar must sum to one bar. `bar()` catches it immediately
+- Change the meter and the accompaniment patterns have to change with it
+- Instrument names must be one of the 46. An unknown name **silences the part**
 
 ---
 
-## 12. 完全な一覧
+## 12. Everything, in one table
 
-| 名前 | 必須 | 形 | 既定 |
+| Name | Required | Shape | Default |
 |---|---|---|---|
-| `BPM` | ● | 数 20〜400 | — |
-| `SECTIONS` | ● | 配列 | — |
-| `VOICES` | ● | 表 | — |
-| `TITLE` | | 文字列 | `"untitled"` |
-| `KEY` | | 文字列 | `""` |
-| `TEMPO_MAP` | | 小節→BPM | `{1: BPM}` |
+| `BPM` | ● | number 20–400 | — |
+| `SECTIONS` | ● | array | — |
+| `VOICES` | ● | map | — |
+| `TITLE` | | string | `"untitled"` |
+| `KEY` | | string | `""` |
+| `TEMPO_MAP` | | bar → BPM | `{1: BPM}` |
 | `TEMPO_CURVE` | | `"smooth"` / `"linear"` | `"smooth"` |
-| `CHORDS` | | 小節→和音 | 無し |
-| `MELODY` | | 小節→旋律 | 無し |
-| `ARRANGE` | | 小節→パート配列 | 無し（＝何も鳴らない） |
-| `TRANSPOSE` | | 小節→半音 | 無し |
-| `BAR_ACCENT` | | 小節→倍率 | 1.0 |
-| `BASS_PATTERNS` | | 名前→配列 | 無し |
-| `ARP_PATTERNS` | | 名前→配列 | 無し |
-| `CHORD_PATTERN` | | 配列 | 無し |
-| `DRUM_KITS` | | キット名→打点 | 無し |
-| `EXTRA_HITS` | | 名前→打点 | 無し |
-| `EDIT_PARTS` | | 文字列の配列 | `VOICES` の鍵 |
-| `AUDIO_TRACKS` | | 名前→歌 | 無し |
-| `GAINS` | | パート→倍率 | 1.0 |
-| `MASTER_GAIN` | | 数 | 1.0 |
-| `MIX` | | パート→設定 | 中央・残響無し・ダッキング無し |
-| `AUTOMATION` | | パート→線 | 無し |
-| `SECTION_PATCH` | | セクション→パート→音色 | 無し |
-| `LEAD_PATCH` | | セクション→音色 | 無し |
-| `SCALE` | | 半音の配列 | 無し |
-| `SCALE_ROOT` | | 数 | 0 |
-| `SIDECHAIN` | | `[深さ, ア, 保, 戻]` | `[0.70, 0.003, 0.020, 0.200]` |
-| `KICK` | | 表 | 既定のキック |
-| `REVERB` | | `[秒, 広がり]` | `[1.9, 4.2]` |
-| `MASTER_LUFS` | | 数 | -9.0 |
-| `PREMIX_LUFS` | | 数 | -20.0 |
+| `CHORDS` | | bar → chord | none |
+| `MELODY` | | bar → melody | none |
+| `ARRANGE` | | bar → parts | none (= silence) |
+| `TRANSPOSE` | | bar → semitones | none |
+| `BAR_ACCENT` | | bar → multiplier | 1.0 |
+| `BASS_PATTERNS` | | name → array | none |
+| `ARP_PATTERNS` | | name → array | none |
+| `CHORD_PATTERN` | | array | none |
+| `DRUM_KITS` | | kit → hits | none |
+| `EXTRA_HITS` | | name → hits | none |
+| `EDIT_PARTS` | | array of strings | the `VOICES` keys |
+| `AUDIO_TRACKS` | | name → track | none |
+| `GAINS` | | part → multiplier | 1.0 |
+| `MASTER_GAIN` | | number | 1.0 |
+| `MIX` | | part → settings | centred, no reverb, no ducking |
+| `AUTOMATION` | | part → lanes | none |
+| `SECTION_PATCH` | | section → part → instrument | none |
+| `LEAD_PATCH` | | section → instrument | none |
+| `SCALE` | | array of semitones | none |
+| `SCALE_ROOT` | | number | 0 |
+| `SIDECHAIN` | | `[depth, a, h, r]` | `[0.70, 0.003, 0.020, 0.200]` |
+| `KICK` | | map | the default kick |
+| `REVERB` | | `[seconds, spread]` | `[1.9, 4.2]` |
+| `MASTER_LUFS` | | number | -9.0 |
+| `PREMIX_LUFS` | | number | -20.0 |

@@ -1,12 +1,13 @@
 # Tonescript
 
-Write music as text. 46 instruments, zero samples.
+A DAW whose project file is text. 46 instruments, zero samples. Free, MIT.
 
+Piano roll, playback, automation, undo, autosave, MIDI in and out.
 Every sound is computed — filters, reverb, mastering, all from scratch.
-No DAW, no plugins, no sample libraries. A 34-second track renders in 0.24s.
+No plugins, no sample libraries. A 34-second track renders in 0.24s.
 
-Songs are plain text, so you can write them by hand — or hand
-[SONGFILE.md](SONGFILE.md) to an AI and have it write them for you.
+The song is plain text, so you can write it by hand — or hand
+[SONGFILE.md](SONGFILE.md) to an AI and have it write it for you.
 
 日本語は下にあります。
 
@@ -118,13 +119,15 @@ make with it, nor any samples or voice banks you supply.
 
 # Tonescript（日本語）
 
-曲をテキストで書く。楽器46種、音源ゼロ。
+プロジェクトファイルがテキストの DAW。楽器46種、音源ゼロ。無料・MIT。
+
+ピアノロール、再生、オートメーション、取り消し、自動保存、MIDI の読み書き。
 
 音は全部計算で作っている。フィルタも残響もマスタリングも自前で、
-DAW もプラグインも音源ライブラリも使わない。34秒の曲が 0.24 秒でできる。
+プラグインも音源ライブラリも使わない。34秒の曲が 0.24 秒でできる。
 
 曲はただのテキストなので、手で書いてもいいし、
-[SONGFILE.md](SONGFILE.md) を AI に渡して書かせてもいい。
+[SONGFILE.ja.md](SONGFILE.ja.md) を AI に渡して書かせてもいい。
 
 ## すぐ試す
 
@@ -169,7 +172,8 @@ crates/app/      画面（egui）、再生（cpal）
 
 ## 曲の書き方
 
-**全仕様は [SONGFILE.md](SONGFILE.md) にある。** 値ひとつずつ、形と範囲と
+**全仕様は [SONGFILE.ja.md](SONGFILE.ja.md) にある。**
+（英語版が正本：[SONGFILE.md](SONGFILE.md)）値ひとつずつ、形と範囲と
 既定値、そして「こう書けばこう鳴る」が書いてある。
 
 音が出る最小の曲：
@@ -182,7 +186,7 @@ let MELODY = #{ "1": bar([[4,"C4"], [4,"E4"], [8,"G4"]]), "2": bar([[16,"C5"]]) 
 let ARRANGE = #{ "1": ["lead"], "2": ["lead"] };
 ```
 
-AI に書かせるなら「SONGFILE.md に従って songs/x.rhai を書いて。〜な曲で」。
+AI に書かせるなら「SONGFILE.ja.md に従って songs/x.rhai を書いて。〜な曲で」。
 そのあと `tone check x`。小節の合計・値の範囲・音名は読み込み時に全部
 検算されるので、通れば曲として破綻していない。
 
