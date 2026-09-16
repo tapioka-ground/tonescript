@@ -19,6 +19,7 @@ mod edit;
 mod font;
 mod keys;
 mod mixer;
+mod sel;
 mod newsong;
 mod play;
 mod settings;
@@ -125,6 +126,8 @@ struct App {
     needles: mixer::Needles,
     /// 前のフレームの時刻。針の落ち方に使う
     last_frame: Option<std::time::Instant>,
+    /// 写したもの
+    clip: sel::Clip,
 
     log: Vec<String>,
     rx: Option<mpsc::Receiver<Msg>>,
@@ -176,6 +179,7 @@ impl Default for App {
             show_mixer: false,
             needles: mixer::Needles::default(),
             last_frame: None,
+            clip: sel::Clip::default(),
             log: Vec::new(),
             rx: None,
             busy: false,
@@ -513,6 +517,53 @@ impl App {
         self.engine.play();
     }
 
+    /// 譜面の編集に効く鍵。
+    ///
+    /// 文字を打ち込んでいる最中（曲名の欄など）は効かせない。
+    fn edit_keys(&mut self, ctx: &egui::Context) {
+        if self.song.is_none() || self.screen != Screen::Editor {
+            return;
+        }
+        if ctx.memory(|m| m.focused().is_some()) {
+            return;
+        }
+        use egui::Key;
+        let (cmd, shift, keys) = ctx.input(|i| {
+            let ks: Vec<Key> = [
+                Key::A, Key::C, Key::X, Key::V, Key::D, Key::Delete, Key::Backspace,
+                Key::ArrowLeft, Key::ArrowRight, Key::ArrowUp, Key::ArrowDown, Key::Escape,
+            ]
+            .into_iter()
+            .filter(|k| i.key_pressed(*k))
+            .collect();
+            (i.modifiers.command, i.modifiers.shift, ks)
+        });
+        if keys.is_empty() {
+            return;
+        }
+        let snap = self.ed.snap.max(1) as i32;
+        for k in keys {
+            match (cmd, k) {
+                (true, Key::A) => self.select_all(),
+                (true, Key::C) => self.copy_sel(),
+                (true, Key::X) => {
+                    self.copy_sel();
+                    self.delete_sel();
+                }
+                (true, Key::V) => self.paste_clip(),
+                (true, Key::D) => self.duplicate_sel(),
+                (false, Key::Delete) | (false, Key::Backspace) => self.delete_sel(),
+                (false, Key::ArrowLeft) => self.nudge_sel(-snap, 0),
+                (false, Key::ArrowRight) => self.nudge_sel(snap, 0),
+                // Shift を足すと1オクターブ
+                (false, Key::ArrowUp) => self.nudge_sel(0, if shift { 12 } else { 1 }),
+                (false, Key::ArrowDown) => self.nudge_sel(0, if shift { -12 } else { -1 }),
+                (false, Key::Escape) => self.ed.clear_sel(),
+                _ => {}
+            }
+        }
+    }
+
     /// 鍵盤から届いたぶんを捌く。毎フレーム1回。
     fn pump_keys(&mut self) {
         if !self.midi.is_open() {
@@ -621,6 +672,122 @@ impl App {
             (Some(n), _) => self.status = format!("鍵盤: {n}"),
             (None, Some(e)) => self.status = format!("[!] 鍵盤が繋がりません: {e}"),
             _ => self.status = "鍵盤が見つかりません".into(),
+        }
+    }
+
+    /// 今のパートの音符。手で触っていなければ曲ファイルのぶんを写してから。
+    fn notes_for_edit(&mut self) -> Option<&mut Vec<tonescript_song::model::Note>> {
+        let part = self.ed.part.clone();
+        self.copy_part_for_edit(&part);
+        self.project.notes.get_mut(&part)
+    }
+
+    /// 今のパートを全部選ぶ。
+    fn select_all(&mut self) {
+        let part = self.ed.part.clone();
+        self.copy_part_for_edit(&part);
+        let n = self.project.notes.get(&part).map(|v| v.len()).unwrap_or(0);
+        self.ed.select((0..n).collect());
+        self.status = format!("{n} 個を選びました");
+    }
+
+    /// 選んでいるものを写す。
+    fn copy_sel(&mut self) {
+        let part = self.ed.part.clone();
+        let Some(ns) = self.project.notes.get(&part) else { return };
+        let c = sel::copy(ns, &self.ed.sel);
+        if c.is_empty() {
+            self.status = "選んでいるものがありません".into();
+            return;
+        }
+        self.status = format!("{} 個を写しました", c.notes.len());
+        self.clip = c;
+    }
+
+    /// 選んでいるものを消す。
+    fn delete_sel(&mut self) {
+        if self.ed.sel.is_empty() {
+            return;
+        }
+        self.record(Tag::Once);
+        let picked = self.ed.sel.clone();
+        let Some(ns) = self.notes_for_edit() else { return };
+        *ns = sel::remove(ns, &picked);
+        self.ed.clear_sel();
+        self.status = format!("{} 個を消しました", picked.len());
+        self.touched();
+    }
+
+    /// 写したものを再生ヘッドの所へ貼る。
+    fn paste_clip(&mut self) {
+        if self.clip.is_empty() {
+            self.status = "写したものがありません".into();
+            return;
+        }
+        let total = self.song.as_ref().map(|s| s.total_steps()).unwrap_or(0);
+        let at = self.ed.snapped(self.head.max(0.0));
+        let add = sel::paste(&self.clip, at, total);
+        if add.is_empty() {
+            self.status = "そこには貼れません（曲の外）".into();
+            return;
+        }
+        self.record(Tag::Once);
+        let Some(ns) = self.notes_for_edit() else { return };
+        let first = ns.len();
+        ns.extend(add.iter().cloned());
+        self.ed.select((first..first + add.len()).collect());
+        self.status = format!("{} 個を貼りました", add.len());
+        self.touched();
+    }
+
+    /// 選んでいるものを、そのすぐ後ろへ複製する。
+    fn duplicate_sel(&mut self) {
+        if self.ed.sel.is_empty() {
+            self.status = "選んでいるものがありません".into();
+            return;
+        }
+        let total = self.song.as_ref().map(|s| s.total_steps()).unwrap_or(0);
+        let part = self.ed.part.clone();
+        let Some(ns) = self.project.notes.get(&part) else { return };
+        let (add, picked) = sel::duplicate(ns, &self.ed.sel, total);
+        if add.is_empty() {
+            self.status = "そこには複製できません（曲の外）".into();
+            return;
+        }
+        self.record(Tag::Once);
+        if let Some(ns) = self.notes_for_edit() {
+            ns.extend(add.iter().cloned());
+        }
+        self.ed.select(picked);
+        self.status = format!("{} 個を複製しました", add.len());
+        self.touched();
+    }
+
+    /// 選んでいるものをまとめて動かす。
+    fn nudge_sel(&mut self, dstep: i32, dpitch: i32) {
+        if self.ed.sel.is_empty() {
+            return;
+        }
+        let total = self.song.as_ref().map(|s| s.total_steps()).unwrap_or(0);
+        let picked = self.ed.sel.clone();
+        self.record(Tag::Curve(self.ed.part.clone(), "nudge"));
+        let moved = match self.notes_for_edit() {
+            Some(ns) => sel::nudge(ns, &picked, dstep, dpitch, total),
+            None => false,
+        };
+        if moved {
+            // 音程を動かしたら、いちばん上の音を返す
+            if dpitch != 0 {
+                let part = self.ed.part.clone();
+                if let Some(n) =
+                    picked.first().and_then(|i| self.project.notes.get(&part)?.get(*i)).cloned()
+                {
+                    self.audition(&part, n.pitch, n.vel, n.len);
+                }
+            }
+            self.touched();
+        } else {
+            self.status = "端に当たっています".into();
         }
     }
 
@@ -920,6 +1087,7 @@ impl eframe::App for App {
         if undo {
             self.undo();
         }
+        self.edit_keys(ctx);
         if redo {
             self.redo();
         }
@@ -1723,6 +1891,39 @@ impl App {
                     }
                 });
             }
+
+            ui.add_space(10.0);
+            ui.separator();
+            ui.label(theme::head("選ぶ"));
+            let n = self.ed.sel.len();
+            ui.label(theme::dim(&if n == 0 {
+                "何も選んでいません".to_string()
+            } else {
+                format!("{n} 個を選んでいます")
+            }));
+            ui.label(theme::dim("空きから引きずると囲んで選ぶ"))
+                .on_hover_text("Shift か Ctrl を押しながら叩くと、1つずつ足す／外す");
+            ui.horizontal_wrapped(|ui| {
+                for (t, tip) in [
+                    ("全部", "Ctrl+A"),
+                    ("写す", "Ctrl+C"),
+                    ("貼る", "Ctrl+V（再生ヘッドの所へ）"),
+                    ("複製", "Ctrl+D（すぐ後ろへ）"),
+                    ("消す", "Delete"),
+                ] {
+                    if ui.small_button(t).on_hover_text(tip).clicked() {
+                        match t {
+                            "全部" => self.select_all(),
+                            "写す" => self.copy_sel(),
+                            "貼る" => self.paste_clip(),
+                            "複製" => self.duplicate_sel(),
+                            _ => self.delete_sel(),
+                        }
+                    }
+                }
+            });
+            ui.label(theme::dim("← → で動かす / ↑ ↓ で音程"))
+                .on_hover_text("↑↓ は半音ずつ。Shift を足すと1オクターブ");
 
             ui.add_space(10.0);
             ui.separator();

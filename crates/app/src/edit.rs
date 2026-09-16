@@ -50,6 +50,8 @@ pub enum Grab {
     Move { part: String, index: usize, offset: f32 },
     /// 右端を掴んで長さを変えている
     Resize { part: String, index: usize },
+    /// 四角で囲んで選んでいる（掴んだ所）
+    Box { from: (f32, i32) },
 }
 
 /// 編集の設定と途中の状態。
@@ -60,8 +62,12 @@ pub struct Editor {
     /// 置くときに合わせる刻み
     pub snap: u32,
     pub grab: Grab,
-    /// 直前に触った音符。色を変えて分かるようにする
-    pub selected: Option<(String, usize)>,
+    /// 選んでいる音符（今のパートの何番目か）。色を変えて分かるようにする。
+    ///
+    /// 番号で持つので、**音符を足したり消したりしたら選び直す**
+    pub sel: Vec<usize>,
+    /// 囲んでいる最中の反対の角
+    pub box_to: Option<(f32, i32)>,
     /// 譜面の見えている幅（ピクセル）。ボタンが拡大率を出すのに使う
     pub view_w: f32,
     /// 物差しを引きずっている最中か
@@ -77,7 +83,8 @@ impl Default for Editor {
             new_len: 4,
             snap: 1,
             grab: Grab::None,
-            selected: None,
+            sel: Vec::new(),
+            box_to: None,
             view_w: 800.0,
             scrubbing: false,
             loop_from: None,
@@ -86,6 +93,32 @@ impl Default for Editor {
 }
 
 impl Editor {
+    /// 選んでいるか。
+    pub fn is_selected(&self, i: usize) -> bool {
+        self.sel.contains(&i)
+    }
+
+    /// 選び直す。
+    pub fn select(&mut self, list: Vec<usize>) {
+        self.sel = list;
+        self.sel.sort_unstable();
+        self.sel.dedup();
+    }
+
+    /// 1つ足す／外す。
+    pub fn toggle(&mut self, i: usize) {
+        if let Some(k) = self.sel.iter().position(|x| *x == i) {
+            self.sel.remove(k);
+        } else {
+            self.sel.push(i);
+            self.sel.sort_unstable();
+        }
+    }
+
+    pub fn clear_sel(&mut self) {
+        self.sel.clear();
+    }
+
     pub fn snapped(&self, step: f32) -> u32 {
         let s = self.snap.max(1) as f32;
         ((step / s).floor() * s).max(0.0) as u32
@@ -219,6 +252,7 @@ pub fn piano_roll(
     draw_notes(&p, score, ed, &view);
     draw_ruler(&p, song, &view, &ruler);
     draw_head(&p, tr, &view, &ruler);
+    draw_box(&p, ed, &view);
 
     // ---- 触り
     let pointer = resp.interact_pointer_pos().or_else(|| ui.input(|i| i.pointer.hover_pos()));
@@ -235,6 +269,7 @@ pub fn piano_roll(
         // 同じ音符を掴んだときに前の段へまとめられてしまう
         history.end_group();
         ed.grab = Grab::None;
+        ed.box_to = None;
         ed.scrubbing = false;
         ed.loop_from = None;
     }
@@ -441,7 +476,7 @@ fn draw_notes(p: &egui::Painter, score: &Score, ed: &Editor, v: &View) {
                 Pos2::new(x0, y),
                 Pos2::new((x1 - 1.0).max(x0 + 2.0), y + v.row_h - 1.0),
             );
-            let picked = ed.selected.as_ref().is_some_and(|(sp, si)| sp == part && *si == i);
+            let picked = front && ed.is_selected(i);
             let a = if front { 80 + n.vel } else { 40 + n.vel / 2 };
             let c = Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), a);
             p.rect_filled(r, 2.0, c);
@@ -450,6 +485,17 @@ fn draw_notes(p: &egui::Painter, score: &Score, ed: &Editor, v: &View) {
             }
         }
     }
+}
+
+/// 囲んでいる四角を描く。
+fn draw_box(p: &egui::Painter, ed: &Editor, v: &View) {
+    let (Grab::Box { from }, Some(to)) = (&ed.grab, ed.box_to) else { return };
+    let r = Rect::from_two_pos(
+        Pos2::new(v.x_of(from.0), v.y_of(from.1)),
+        Pos2::new(v.x_of(to.0), v.y_of(to.1) + v.row_h),
+    );
+    p.rect_filled(r, 1.0, Color32::from_rgba_unmultiplied(0x0a, 0x84, 0xff, 40));
+    p.rect_stroke(r, 1.0, Stroke::new(1.0, theme::BLUE));
 }
 
 /// 音符の右端をつかむ幅（ピクセル）。
@@ -487,20 +533,27 @@ fn handle_input(
         }
     };
 
+    // どの音符の上か。`ed` を借りたままにしないよう、パート名を写して持つ
+    let part_name = ed.part.clone();
     let hit = |project: &Project| -> Option<usize> {
-        let ns = project.notes.get(&ed.part)?;
+        let ns = project.notes.get(&part_name)?;
         ns.iter().position(|n| {
             n.pitch == pitch && (n.pos as f32) <= step && step < (n.pos + n.len.max(1)) as f32
         })
     };
 
-    // --- 右クリックで消す
+    // --- 右クリックで消す。選んでいるものの上なら、選んだぶん全部
     if resp.secondary_clicked() {
         ensure(project, ed);
         if let Some(i) = hit(project) {
             history.record(project, Tag::Once);
-            project.notes.get_mut(&ed.part).unwrap().remove(i);
-            ed.selected = None;
+            let ns = project.notes.get_mut(&ed.part).unwrap();
+            if ed.is_selected(i) && ed.sel.len() > 1 {
+                *ns = crate::sel::remove(ns, &ed.sel);
+            } else {
+                ns.remove(i);
+            }
+            ed.clear_sel();
             out.changed = true;
         }
         return;
@@ -513,14 +566,20 @@ fn handle_input(
             let n = &project.notes[&ed.part][i];
             let right = v.x_of((n.pos + n.len.max(1)) as f32);
             out.hit = Some((ed.part.clone(), n.pitch, n.vel, n.len));
-            ed.selected = Some((ed.part.clone(), i));
+            // 選んでいないものを掴んだら、それだけを選び直す。
+            // 選んでいるものを掴んだら、選んだまま（まとめて動かすため）
+            if !ed.is_selected(i) {
+                ed.select(vec![i]);
+            }
             ed.grab = if (right - pos.x).abs() <= EDGE {
                 Grab::Resize { part: ed.part.clone(), index: i }
             } else {
                 Grab::Move { part: ed.part.clone(), index: i, offset: step - n.pos as f32 }
             };
         } else {
-            ed.grab = Grab::None;
+            // 何も無い所から引きずったら、四角で囲んで選ぶ
+            ed.grab = Grab::Box { from: (step, pitch) };
+            ed.box_to = Some((step, pitch));
         }
     }
 
@@ -533,29 +592,34 @@ fn handle_input(
                 let want = (step - offset).max(0.0);
                 let s = ed.snap.max(1) as f32;
                 let np = ((want / s).round() * s) as u32;
-                let differs = project
-                    .notes
-                    .get(&part)
-                    .and_then(|ns| ns.get(index))
-                    .is_some_and(|n| n.pos != np.min(total.saturating_sub(n.len.max(1))) || n.pitch != pitch);
-                if differs {
-                    history.record(project, Tag::Move(part.clone(), index));
+                let Some(now) = project.notes.get(&part).and_then(|ns| ns.get(index)).cloned()
+                else {
+                    return;
+                };
+                let np = np.min(total.saturating_sub(now.len.max(1)));
+                let (dstep, dpitch) = (np as i32 - now.pos as i32, pitch - now.pitch);
+                if dstep == 0 && dpitch == 0 {
+                    return;
                 }
-                if let Some(ns) = project.notes.get_mut(&part) {
-                    if let Some(n) = ns.get_mut(index) {
-                        let np = np.min(total.saturating_sub(n.len.max(1)));
-                        if n.pos != np || n.pitch != pitch {
-                            // 音程が動いたら、その音を返す。掴んだまま
-                            // 上下すれば音階が聞こえる
-                            if n.pitch != pitch {
-                                out.hit = Some((part.clone(), pitch, n.vel, n.len));
-                            }
-                            n.pos = np;
-                            n.pitch = pitch.clamp(0, 127);
-                            out.changed = true;
-                        }
+                history.record(project, Tag::Move(part.clone(), index));
+                let Some(ns) = project.notes.get_mut(&part) else { return };
+                // 掴んだ1本だけでなく、選んでいるぶん全部を同じだけ動かす
+                let sel: Vec<usize> =
+                    if ed.sel.len() > 1 { ed.sel.clone() } else { vec![index] };
+                if crate::sel::nudge(ns, &sel, dstep, dpitch, total) {
+                    if dpitch != 0 {
+                        // 音程が動いたら、その音を返す。掴んだまま
+                        // 上下すれば音階が聞こえる
+                        out.hit = Some((part.clone(), pitch, now.vel, now.len));
                     }
+                    out.changed = true;
                 }
+            }
+            Grab::Box { from } => {
+                ed.box_to = Some((step, pitch));
+                let ns = project.notes.get(&ed.part).cloned().unwrap_or_default();
+                let picked = crate::sel::marquee(&ns, from, (step, pitch));
+                ed.select(picked);
             }
             Grab::Resize { part, index } => {
                 let s = ed.snap.max(1) as f32;
@@ -586,10 +650,21 @@ fn handle_input(
     // --- 左クリックで置く（空いている所だけ）
     if resp.clicked() {
         ensure(project, ed);
+        let add = ui.input(|i| i.modifiers.shift || i.modifiers.command);
         if let Some(i) = hit(project) {
             let n = &project.notes[&ed.part][i];
             out.hit = Some((ed.part.clone(), n.pitch, n.vel, n.len));
-            ed.selected = Some((ed.part.clone(), i));
+            // Shift か Ctrl を押しながらなら、選んだものに足す／外す
+            if add {
+                ed.toggle(i);
+            } else {
+                ed.select(vec![i]);
+            }
+            return;
+        }
+        if add {
+            // 押しながら空きを叩いたら、選んだものを解くだけ
+            ed.clear_sel();
             return;
         }
         if step < 0.0 || step >= total as f32 || !(0..=127).contains(&pitch) {
@@ -604,10 +679,10 @@ fn handle_input(
         );
         out.hit = Some((ed.part.clone(), pitch, 100, len));
         // 置いたものを選んだことにする
-        ed.selected = project.notes[&ed.part]
+        let picked = project.notes[&ed.part]
             .iter()
-            .position(|n| n.pos == at && n.pitch == pitch)
-            .map(|i| (ed.part.clone(), i));
+            .position(|n| n.pos == at && n.pitch == pitch);
+        ed.select(picked.into_iter().collect());
         out.changed = true;
     }
 
