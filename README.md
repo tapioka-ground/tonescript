@@ -2,7 +2,8 @@
 
 A DAW whose project file is text. 46 instruments, zero samples. Free, MIT.
 
-Piano roll, automation, undo, autosave, MIDI in and out.
+Piano roll, automation, undo, autosave, MIDI files in and out.
+Plug in a MIDI keyboard and play it, or record what you play.
 Notes sound the moment you place them — a real-time engine, not a re-render.
 Every sound is computed — filters, reverb, mastering, all from scratch.
 No plugins, no sample libraries. A 34-second track renders in 0.24s.
@@ -51,10 +52,10 @@ crates/engine/   real-time playback: scheduler, lock-free queue, mixer
 crates/project/  edit state, autosave, undo
 crates/midi/     MIDI read/write
 crates/cli/      the `tone` command
-crates/app/      the window (egui), playback (cpal)
+crates/app/      the window (egui), audio out (cpal), MIDI keyboard (midir)
 ```
 
-Dependencies: Rhai, rayon, egui, cpal. That's all.
+Dependencies: Rhai, rayon, egui, cpal, midir. That's all.
 
 ## Writing songs
 
@@ -104,7 +105,7 @@ interpolation above, which is the improvement.
 The 21× on `highpass` is where Python's cleverness disappeared: an FFT
 convolution became a three-line loop.
 
-311 tests.
+330 tests.
 
 ## Not ported
 
@@ -124,6 +125,7 @@ make with it, nor any samples or voice banks you supply.
 プロジェクトファイルがテキストの DAW。楽器46種、音源ゼロ。無料・MIT。
 
 ピアノロール、オートメーション、取り消し、自動保存、MIDI の読み書き。
+MIDI 鍵盤を挿せば弾ける。弾いたものを譜面へ録ることもできる。
 置いた音はその場で鳴る。作り直して鳴らすのではなく、鳴らしながら作っている。
 
 音は全部計算で作っている。フィルタも残響もマスタリングも自前で、
@@ -169,10 +171,10 @@ crates/engine/   鳴らしながら計算する側。先回り係・待たない
 crates/project/  編集の状態、自動保存、取り消し
 crates/midi/     MIDI の読み書き
 crates/cli/      tone コマンド
-crates/app/      画面（egui）、再生（cpal）
+crates/app/      画面（egui）、音の出口（cpal）、MIDI 鍵盤（midir）
 ```
 
-依存は Rhai、rayon、egui、cpal だけ。
+依存は Rhai、rayon、egui、cpal、midir だけ。
 
 ## 曲の書き方
 
@@ -222,7 +224,7 @@ AI に書かせるなら「SONGFILE.ja.md に従って songs/x.rhai を書いて
 `highpass` の21倍が「Python の賢さが消えた」ところ。FFT 畳み込みが
 3行のループになった。
 
-テスト 311 件。
+テスト 330 件。
 
 ## 移植しなかったもの
 

@@ -262,7 +262,9 @@ impl Mixer {
                 Msg::Flush(g) => {
                     let mut keep = Vec::with_capacity(self.voices.len());
                     for v in self.voices.drain(..) {
-                        if v.gen >= g {
+                        // 鍵を押している音は曲の位置に乗っていないので、
+                        // 頭出ししても止めない（押しているのに消えたら驚く）
+                        if v.gen >= g || v.live {
                             keep.push(v);
                         } else {
                             // 音側では捨てない。輪へ返して向こうで捨てる
@@ -277,6 +279,21 @@ impl Mixer {
                 }
                 Msg::Kick(at) => self.duck.push(at),
                 Msg::Trim(t) => self.trim = t,
+                Msg::Cut { part, pitch, at } => {
+                    for v in self.voices.iter_mut() {
+                        // 新しく足したぶんより前のものだけを終わらせる
+                        if v.live && v.part == part && v.pitch == pitch && v.start < at {
+                            v.cut_at(at);
+                        }
+                    }
+                }
+                Msg::Off { part, pitch } => {
+                    for v in self.voices.iter_mut() {
+                        if v.live && v.part == part && v.pitch == pitch {
+                            v.release();
+                        }
+                    }
+                }
             }
         }
     }
@@ -336,10 +353,34 @@ impl Mixer {
                 .min(v.buf.len().saturating_sub(skip))
                 .min(n - at);
             let dst = &mut self.acc[v.part][at..at + take];
-            for (d, s) in dst.iter_mut().zip(&v.buf[skip..skip + take]) {
-                *d += *s;
+            let src = &v.buf[skip..skip + take];
+            // 立ち上がり・継ぎ目・離した後。何も無ければ素通し
+            let shaped = v.fade_in > 0 || v.cut.is_some() || v.off.is_some();
+            if !shaped {
+                for (d, s) in dst.iter_mut().zip(src) {
+                    *d += *s;
+                }
+                v.done = (skip + take).max(v.done);
+            } else {
+                let mut off = v.off;
+                for (k, (d, s)) in dst.iter_mut().zip(src).enumerate() {
+                    let at = from + k as u64;
+                    let mut g = v.gain_at(at);
+                    if let Some((span, left)) = &mut off {
+                        if *left == 0 {
+                            g = 0.0;
+                        } else {
+                            g *= *left as f32 / (*span).max(1) as f32;
+                            *left -= 1;
+                        }
+                    }
+                    *d += *s * g;
+                }
+                v.off = off;
+                let gone = v.off.is_some_and(|(_, left)| left == 0)
+                    || v.cut.is_some_and(|(at, span)| from + take as u64 >= at + span as u64);
+                v.done = if gone { v.buf.len() } else { (skip + take).max(v.done) };
             }
-            v.done = (skip + take).max(v.done);
         }
 
         // パートごとに整えて左右へ
@@ -552,7 +593,18 @@ mod tests {
     }
 
     fn voice(part: usize, start: u64, v: f32, n: usize) -> Voice {
-        Voice { part, start, buf: vec![v; n], done: 0, gen: 1, live: false }
+        Voice {
+            part,
+            start,
+            buf: vec![v; n],
+            done: 0,
+            gen: 1,
+            live: false,
+            pitch: 60,
+            off: None,
+            fade_in: 0,
+            cut: None,
+        }
     }
 
     #[test]
@@ -687,6 +739,39 @@ mod tests {
         // （折り返しは次に呼ばれたときの頭で起きる）
         assert!(pos <= 32, "繰り返しの外へ出た: {pos}");
         assert!(sh.playing.load(Ordering::Relaxed), "繰り返しなのに止まった");
+    }
+
+    #[test]
+    fn a_released_key_fades_instead_of_cutting() {
+        let (mut m, tx, _gc, sh) = rig();
+        tx.push(Msg::Plan(plan_with(480_000, 1))).unwrap();
+        let mut v = voice(0, 0, 0.5, 48_000);
+        v.live = true;
+        v.pitch = 64;
+        tx.push(Msg::Voice(v)).unwrap();
+        sh.playing.store(true, Ordering::Relaxed);
+        let (mut l, mut r) = (vec![0.0; 512], vec![0.0; 512]);
+        m.fill(&mut l, &mut r);
+        assert!(l[100] > 0.4, "鳴っていない");
+
+        // 別の音程を離しても消えない
+        tx.push(Msg::Off { part: 0, pitch: 60 }).unwrap();
+        m.fill(&mut l, &mut r);
+        assert!(l[100] > 0.4, "違う音程で消えた");
+
+        // 離す。ぶつ切りではなく下がっていくこと
+        tx.push(Msg::Off { part: 0, pitch: 64 }).unwrap();
+        let n = (tonescript_engine_release() * SR) as usize;
+        let (mut fl, mut fr) = (vec![0.0; n + 256], vec![0.0; n + 256]);
+        m.fill(&mut fl, &mut fr);
+        assert!(fl[0] > 0.4, "離した瞬間に切れた");
+        assert!(fl[n / 2] < fl[0], "下がっていない");
+        assert!(fl[n / 2] > 0.0, "途中で切れた");
+        assert!(fl[n + 100].abs() < 1e-6, "消えていない: {}", fl[n + 100]);
+    }
+
+    fn tonescript_engine_release() -> f32 {
+        crate::voice::RELEASE
     }
 
     #[test]

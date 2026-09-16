@@ -17,6 +17,7 @@
 mod browser;
 mod edit;
 mod font;
+mod keys;
 mod newsong;
 mod play;
 mod settings;
@@ -105,6 +106,18 @@ struct App {
     /// 画面が再生に追いて動くか
     follow: bool,
 
+    /// 鍵盤の口
+    midi: keys::Input,
+    /// 鍵盤の今（押している音・ペダル）
+    board: keys::Keyboard,
+    /// 弾いたものを譜面へ入れるか
+    arm: bool,
+    /// 録っている最中の音。音程 -> (始めた目盛り, 強さ)
+    taking: std::collections::HashMap<i32, (u32, u8)>,
+    /// 見つかっている鍵盤の名前。開くたびに数え直すと重いので覚えておく
+    ports: Vec<String>,
+    ports_at: Option<std::time::Instant>,
+
     log: Vec<String>,
     rx: Option<mpsc::Receiver<Msg>>,
     busy: bool,
@@ -146,6 +159,12 @@ impl Default for App {
             loop_range: None,
             step_times: Vec::new(),
             follow: true,
+            midi: keys::Input::idle(),
+            board: keys::Keyboard::default(),
+            arm: false,
+            taking: std::collections::HashMap::new(),
+            ports: Vec::new(),
+            ports_at: None,
             log: Vec::new(),
             rx: None,
             busy: false,
@@ -236,6 +255,13 @@ impl App {
         self.loop_range = None;
         self.engine.stop();
         self.engine.set_loop(0, 0);
+        // 押しっぱなしのまま曲を変えると鳴り続ける
+        for act in self.board.panic() {
+            if let keys::Act::Off { pitch } = act {
+                self.engine.key_up(&self.ed.part.clone(), pitch);
+            }
+        }
+        self.taking.clear();
         self.rebuild();
         self.push_to_engine();
         // 開いた直後は曲ぜんぶが見えるほうが迷わない
@@ -473,6 +499,132 @@ impl App {
         self.engine.play();
     }
 
+    /// 鍵盤から届いたぶんを捌く。毎フレーム1回。
+    fn pump_keys(&mut self) {
+        if !self.midi.is_open() {
+            return;
+        }
+        let evs = self.midi.drain();
+        if evs.is_empty() {
+            return;
+        }
+        let part = self.ed.part.clone();
+        let mut changed = false;
+        for ev in evs {
+            for act in self.board.apply(ev) {
+                match act {
+                    keys::Act::On { pitch, vel } => {
+                        self.engine.key_down(&part, pitch, vel);
+                        if self.arm {
+                            changed |= self.take_on(&part, pitch, vel);
+                        }
+                    }
+                    keys::Act::Off { pitch } => {
+                        self.engine.key_up(&part, pitch);
+                        if self.arm {
+                            changed |= self.take_off(&part, pitch);
+                        }
+                    }
+                }
+            }
+        }
+        if changed {
+            self.touched();
+        }
+    }
+
+    /// 弾き始めを覚える。止まっているときは、その場で1つ置いて先へ進む。
+    fn take_on(&mut self, part: &str, pitch: i32, vel: u8) -> bool {
+        let total = self.song.as_ref().map(|s| s.total_steps()).unwrap_or(0);
+        if total == 0 {
+            return false;
+        }
+        if self.engine.is_playing() {
+            // 鳴らしながら弾いている。離すまで長さが決まらないので覚えておく
+            self.taking.insert(pitch, (self.ed.snapped(self.head.max(0.0)), vel));
+            return false;
+        }
+        // 止まっている。1つ置いて、その長さぶん先へ進む（ステップ入力）
+        let at = self.ed.snapped(self.head.max(0.0)).min(total.saturating_sub(1));
+        let len = self.ed.new_len.max(1).min(total - at);
+        self.record(Tag::Once);
+        self.copy_part_for_edit(part);
+        self.project.add_note(
+            part,
+            tonescript_song::model::Note { pos: at, len, pitch, vel, mora: String::new() },
+        );
+        self.head = (at + len) as f32;
+        self.engine.seek(self.sample_of(self.head));
+        true
+    }
+
+    /// 弾き終わりで長さが決まる。
+    fn take_off(&mut self, part: &str, pitch: i32) -> bool {
+        let Some((from, vel)) = self.taking.remove(&pitch) else { return false };
+        let total = self.song.as_ref().map(|s| s.total_steps()).unwrap_or(0);
+        if total == 0 || from >= total {
+            return false;
+        }
+        let now = self.ed.snapped(self.head.max(0.0));
+        let len = now.saturating_sub(from).max(self.ed.snap.max(1)).min(total - from);
+        self.record(Tag::Once);
+        self.copy_part_for_edit(part);
+        self.project.add_note(
+            part,
+            tonescript_song::model::Note { pos: from, len, pitch, vel, mora: String::new() },
+        );
+        true
+    }
+
+    /// 曲ファイルが作ったぶんを手元へ写す。触る前に一度だけ。
+    fn copy_part_for_edit(&mut self, part: &str) {
+        if !self.project.is_edited(part) {
+            let from = self
+                .score
+                .as_ref()
+                .and_then(|sc| sc.get(part).cloned())
+                .unwrap_or_default();
+            self.project.notes.insert(part.to_string(), from);
+        }
+    }
+
+    /// ぶら下がっている鍵盤を数え直す。1秒に1回まで。
+    fn refresh_ports(&mut self) {
+        let fresh = self
+            .ports_at
+            .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(1));
+        if fresh {
+            return;
+        }
+        self.ports = keys::Input::ports();
+        self.ports_at = Some(std::time::Instant::now());
+    }
+
+    /// その鍵盤へ繋ぐ。
+    fn open_midi(&mut self, which: usize) {
+        self.midi = keys::Input::open(Some(which));
+        match (&self.midi.name, &self.midi.error) {
+            (Some(n), _) => self.status = format!("鍵盤: {n}"),
+            (None, Some(e)) => self.status = format!("[!] 鍵盤が繋がりません: {e}"),
+            _ => self.status = "鍵盤が見つかりません".into(),
+        }
+    }
+
+    /// 鍵盤を繋ぐ・切る。
+    fn toggle_midi(&mut self) {
+        if self.midi.is_open() {
+            for act in self.board.panic() {
+                if let keys::Act::Off { pitch } = act {
+                    self.engine.key_up(&self.ed.part.clone(), pitch);
+                }
+            }
+            self.midi = keys::Input::idle();
+            self.status = "鍵盤を切りました".into();
+            return;
+        }
+        self.open_midi(0);
+    }
+
     /// 触った音をその場で返す。**DAW なら当たり前のこと。**
     fn audition(&mut self, part: &str, pitch: i32, vel: u8, len: u32) {
         if self.out.error.is_some() || self.engine.is_playing() {
@@ -662,6 +814,7 @@ impl App {
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _f: &mut eframe::Frame) {
         self.pump();
+        self.pump_keys();
         self.tick_autosave();
         if self.engine.is_playing() {
             self.head = self.sec_to_step(self.engine.seconds());
@@ -670,7 +823,7 @@ impl eframe::App for App {
         if self.engine.took_end() {
             self.status = "終わりまで鳴らしました".into();
         }
-        if self.busy {
+        if self.busy || self.midi.is_open() {
             ctx.request_repaint();
         } else if self.saver.is_dirty() {
             // 自動保存の時計を進めるために、たまに起こす
@@ -1340,6 +1493,62 @@ impl App {
                         self.scroll = 0.0;
                     }
                     ui.checkbox(&mut self.follow, "追う");
+                    ui.separator();
+                    // 鍵盤
+                    let on = self.midi.is_open();
+                    if on {
+                        if ui
+                            .selectable_label(true, "鍵盤 ●")
+                            .on_hover_text(match &self.midi.name {
+                                Some(n) => format!("{n}（押すと切る）"),
+                                None => "押すと切る".into(),
+                            })
+                            .clicked()
+                        {
+                            self.toggle_midi();
+                        }
+                    } else {
+                        // 繋がっていない。見つかったものから選ばせる
+                        let mut pick = None;
+                        ui.menu_button("鍵盤", |ui| {
+                            self.refresh_ports();
+                            if self.ports.is_empty() {
+                                ui.label(theme::dim("鍵盤が見つかりません"));
+                                ui.label(theme::dim("挿してから開き直してください"));
+                            }
+                            for (i, name) in self.ports.iter().enumerate() {
+                                if ui.button(name).clicked() {
+                                    pick = Some(i);
+                                    ui.close_menu();
+                                }
+                            }
+                        })
+                        .response
+                        .on_hover_text("MIDI 鍵盤を繋ぐ");
+                        if let Some(i) = pick {
+                            self.open_midi(i);
+                        }
+                    }
+                    if on {
+                        if ui
+                            .selectable_label(self.arm, "録る")
+                            .on_hover_text(
+                                "弾いたものを譜面へ入れる。
+                                 鳴らしながら弾けば弾いた所へ、
+                                 止めて弾けば1つずつ置いて先へ進む",
+                            )
+                            .clicked()
+                        {
+                            self.arm = !self.arm;
+                            if !self.arm {
+                                self.taking.clear();
+                            }
+                        }
+                        let n = self.board.held_count();
+                        if n > 0 {
+                            ui.label(theme::dim(&format!("{n} 押下")));
+                        }
+                    }
                     ui.separator();
                     // 表示する範囲。拡大率そのものではなく「何小節ぶん」で選ぶ
                     if ui.button("全体").on_hover_text("曲ぜんぶを画面に収める").clicked() {

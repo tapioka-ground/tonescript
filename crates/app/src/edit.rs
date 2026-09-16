@@ -86,7 +86,7 @@ impl Default for Editor {
 }
 
 impl Editor {
-    fn snapped(&self, step: f32) -> u32 {
+    pub fn snapped(&self, step: f32) -> u32 {
         let s = self.snap.max(1) as f32;
         ((step / s).floor() * s).max(0.0) as u32
     }

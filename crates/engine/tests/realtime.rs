@@ -122,6 +122,114 @@ fn a_key_press_sounds_even_while_stopped() {
 }
 
 #[test]
+fn a_key_sounds_quickly_after_it_is_pressed() {
+    // 押してから音が出るまで。鍵盤は、ここが遅いと弾けない
+    let (s, sc) = song();
+    let (mut e, mut m) = Engine::new();
+    e.set_song(s, sc);
+    std::thread::sleep(Duration::from_millis(80));
+
+    let t0 = Instant::now();
+    e.key_down("lead", 67, 100);
+    let (mut bl, mut br) = (vec![0.0; 256], vec![0.0; 256]);
+    let mut waited = Duration::ZERO;
+    loop {
+        m.fill(&mut bl, &mut br);
+        if peak(&bl) > 0.001 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+        waited = t0.elapsed();
+        assert!(waited < Duration::from_millis(300), "押しても音が出ない");
+    }
+    // 1ブロック（256サンプル = 5.3ms）ぶんの粗さはある。
+    // 50ms 以内なら、弾いていて遅れは感じない
+    assert!(waited < Duration::from_millis(50), "音が出るまで {waited:?} 掛かった");
+}
+
+#[test]
+fn a_long_hold_is_seamless() {
+    // 押しっぱなしにすると、裏で作り足して繋いでいく。
+    // **繋ぎ目で切れたり、跳ねたりしないこと。**
+    let (s, sc) = song();
+    let (mut e, mut m) = Engine::new();
+    e.set_song(s, sc);
+    std::thread::sleep(Duration::from_millis(80));
+    e.key_down("lead", 60, 110);
+    // 最初のぶんが届くのを待つ（時計は鳴らし始めるまで進まない）
+    std::thread::sleep(Duration::from_millis(60));
+
+    // 最初のぶん（0.3秒）をまたいで、1.2 秒ぶん鳴らす
+    let (l, _r) = pull(&mut m, 60, 1024, Duration::from_millis(3));
+    let n = l.len();
+    assert!(peak(&l[..1024]) > 0.005, "鳴り出していない");
+    // 継ぎ目があるあたり（0.19秒 = 0.3秒の62%）でも途切れていないこと
+    let seam = (0.186 * SR) as usize;
+    let win = 1024;
+    assert!(
+        rms(&l[seam..seam + win]) > 0.001,
+        "継ぎ目で消えた（{}）",
+        rms(&l[seam..seam + win])
+    );
+    // 隣り合う窓で急に倍以上／半分以下にならないこと
+    let step = 512;
+    let mut prev = rms(&l[..step]);
+    for i in (step..n - step).step_by(step) {
+        let now = rms(&l[i..i + step]);
+        if prev > 0.01 && now > 0.01 {
+            let jump = (now / prev).max(prev / now);
+            assert!(jump < 3.0, "{:.3}秒で {jump:.1}倍 跳ねた", i as f32 / SR);
+        }
+        prev = now;
+    }
+    // 1.2 秒たっても鳴っていること（作り足しが効いている）
+    let tail = (1.0 * SR) as usize;
+    assert!(tail + win < n, "短すぎる");
+    assert!(rms(&l[tail..tail + win]) > 0.0005, "作り足しが止まって消えた");
+    e.key_up("lead", 60);
+}
+
+#[test]
+fn a_held_key_keeps_sounding_until_it_is_released() {
+    // 鍵盤を挿したときの道。押したら鳴り続け、離したら消える
+    let (s, sc) = song();
+    let (mut e, mut m) = Engine::new();
+    e.set_song(s, sc);
+    std::thread::sleep(Duration::from_millis(60));
+
+    e.key_down("lead", 67, 100);
+    std::thread::sleep(Duration::from_millis(60));
+    let (a, _) = pull(&mut m, 12, 1024, Duration::from_millis(2));
+    assert!(peak(&a) > 0.01, "押しても鳴らない");
+
+    // 押しっぱなし。まだ鳴っている
+    let (b, _) = pull(&mut m, 12, 1024, Duration::from_millis(2));
+    assert!(peak(&b) > 0.005, "押しっぱなしなのに消えた");
+
+    e.key_up("lead", 67);
+    std::thread::sleep(Duration::from_millis(40));
+    // 消えるまで（下げるのに 0.025 秒）
+    pull(&mut m, 8, 1024, Duration::from_millis(2));
+    let (c, _) = pull(&mut m, 8, 1024, Duration::from_millis(2));
+    assert!(peak(&c) < 1e-4, "離しても鳴り続けている（ピーク {}）", peak(&c));
+}
+
+#[test]
+fn releasing_a_different_key_does_not_stop_this_one() {
+    let (s, sc) = song();
+    let (mut e, mut m) = Engine::new();
+    e.set_song(s, sc);
+    std::thread::sleep(Duration::from_millis(60));
+    e.key_down("lead", 67, 100);
+    std::thread::sleep(Duration::from_millis(60));
+    pull(&mut m, 4, 1024, Duration::from_millis(2));
+    e.key_up("lead", 60); // 押していない音
+    std::thread::sleep(Duration::from_millis(40));
+    let (a, _) = pull(&mut m, 8, 1024, Duration::from_millis(2));
+    assert!(peak(&a) > 0.005, "関係ない鍵で消えた");
+}
+
+#[test]
 fn a_fader_moves_while_it_is_playing() {
     // 鳴らしたまま音量を変えて、本当に変わるか
     let (s, sc) = song();

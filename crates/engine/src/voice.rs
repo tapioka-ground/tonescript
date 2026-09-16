@@ -11,6 +11,29 @@
 //!
 //! 1本は 1ミリ秒未満でできる（920本で 183ms）。先回りは 300ミリ秒あれば
 //! 足りる。
+//!
+//! 押しっぱなしの鍵はどうするか
+//! ----------------------------
+//! 譜面の音符は長さが決まっているが、**鍵盤は離すまで長さが分からない。**
+//! 押した瞬間に「6秒ぶん」を作ると、ピアノで 52ミリ秒掛かる。鍵盤としては
+//! 遅すぎる（指と音がずれて弾けない）。
+//!
+//! そこで**少しずつ作り足す**。まず 0.3 秒ぶんを作って鳴らし、鳴っている
+//! あいだに次の長いぶんを作って、途中で差し替える。
+//!
+//! ```text
+//!   押す
+//!    │  0.3秒ぶん ──────┐
+//!    │                  ├ここで差し替え
+//!    │      1.2秒ぶん ──┴──────────────┐
+//!    │                                 ├ここで差し替え
+//!    │           3.6秒ぶん ────────────┴───────────→
+//! ```
+//!
+//! 差し替えられるのは、**短く作った音と長く作った音が途中まで同じだから。**
+//! 違うのは終わりの減衰だけなので、そこへ入る前に乗り換えれば繋がる。
+//! 実測で、乗り換え位置での違いは信号より 48dB 以上小さい（多くの音色では
+//! 1ビットも違わない）。念のため 2ミリ秒だけ重ねて渡す。
 
 use std::sync::Arc;
 
@@ -37,9 +60,60 @@ pub struct Voice {
     /// 譜面の音は「曲のどこか」に居るので、止めれば黙る。鍵を押した音は
     /// **止まっていても鳴らないと困る**ので、止まらない時計のほうへ乗せる。
     pub live: bool,
+    /// どの音程か。鍵を離したときに探すため
+    pub pitch: i32,
+    /// 離された。`(掛ける長さ, 残り)` サンプル。
+    /// **ぶつ切りにすると必ずプツッと鳴る**ので、短く下げて消す
+    pub off: Option<(u32, u32)>,
+    /// 頭を上げながら入る長さ（サンプル）。作り足しの継ぎ目で使う
+    pub fade_in: u32,
+    /// `(この位置から, 何サンプルで)` 下げて終わる。作り足しの継ぎ目で使う
+    pub cut: Option<(u64, u32)>,
 }
 
+/// 鍵を離してから消えるまで。
+pub const RELEASE: f32 = 0.025;
+
+/// 作り足しの継ぎ目で重ねる長さ。
+pub const XFADE: f32 = 0.002;
+
 impl Voice {
+    /// その絶対位置での倍率。1.0 なら素通し。
+    ///
+    /// 頭の立ち上がり・継ぎ目の下がり・離したときの下がりを、まとめてここで見る。
+    #[inline]
+    pub fn gain_at(&self, at: u64) -> f32 {
+        let mut g = 1.0f32;
+        if self.fade_in > 0 {
+            let i = at.saturating_sub(self.start);
+            if i < self.fade_in as u64 {
+                g *= i as f32 / self.fade_in as f32;
+            }
+        }
+        if let Some((from, span)) = self.cut {
+            if at >= from {
+                let i = at - from;
+                g *= if i >= span as u64 { 0.0 } else { 1.0 - i as f32 / span as f32 };
+            }
+        }
+        g
+    }
+
+    /// 継ぎ目。ここから下げて終わる。
+    pub fn cut_at(&mut self, at: u64) {
+        if self.cut.is_none() {
+            self.cut = Some((at, (XFADE * SR) as u32));
+        }
+    }
+
+    /// 離す。すでに離してあるなら何もしない。
+    pub fn release(&mut self) {
+        if self.off.is_none() {
+            let n = (RELEASE * SR) as u32;
+            self.off = Some((n, n));
+        }
+    }
+
     pub fn end(&self) -> u64 {
         self.start + self.buf.len() as u64
     }
@@ -98,6 +172,10 @@ pub enum Msg {
     Flush(u64),
     /// キックがここで鳴る。サイドチェインを凹ませる合図
     Kick(u64),
+    /// 鍵を離した。そのパートのその音程を、短く下げて消す
+    Off { part: usize, pitch: i32 },
+    /// 作り足した。古いほうをこの位置で終わらせる
+    Cut { part: usize, pitch: i32, at: u64 },
     /// トラックごとの尖り止めの閾値 `(始まり, 天井)`。パートの順に並ぶ。
     /// 曲まるごとの実効値から決まるので、裏で測ってから届く
     Trim(Vec<Option<(f32, f32)>>),
@@ -179,11 +257,104 @@ mod tests {
 
     #[test]
     fn a_voice_knows_when_it_is_done() {
-        let mut v =
-            Voice { part: 0, start: 100, buf: vec![0.0; 10], done: 0, gen: 1, live: false };
+        let mut v = Voice {
+            part: 0,
+            start: 100,
+            buf: vec![0.0; 10],
+            done: 0,
+            gen: 1,
+            live: false,
+            pitch: 60,
+            off: None,
+            fade_in: 0,
+            cut: None,
+        };
         assert_eq!(v.end(), 110);
         assert!(!v.finished());
         v.done = 10;
         assert!(v.finished());
+    }
+
+    #[test]
+    fn the_seam_hands_over_without_a_gap() {
+        // 古いほうが下がりきるのと、新しいほうが上がりきるのが同じ長さ。
+        // 足して 1.0 のままなので、継ぎ目で膨らみも凹みもしない
+        let span = (XFADE * SR) as u32;
+        let mut old = Voice {
+            part: 0,
+            start: 0,
+            buf: vec![1.0; 100_000],
+            done: 0,
+            gen: 1,
+            live: true,
+            pitch: 60,
+            off: None,
+            fade_in: 0,
+            cut: None,
+        };
+        old.cut_at(1000);
+        let new = Voice { start: 1000, fade_in: span, ..Voice {
+            part: 0,
+            start: 0,
+            buf: vec![1.0; 100_000],
+            done: 0,
+            gen: 1,
+            live: true,
+            pitch: 60,
+            off: None,
+            fade_in: 0,
+            cut: None,
+        }};
+        for i in 0..span as u64 {
+            let sum = old.gain_at(1000 + i) + new.gain_at(1000 + i);
+            assert!((sum - 1.0).abs() < 1e-6, "継ぎ目で {sum} になった（{i} 目）");
+        }
+        assert_eq!(old.gain_at(1000 + span as u64), 0.0, "古いほうが残った");
+        assert_eq!(new.gain_at(1000 + span as u64), 1.0, "新しいほうが上がりきっていない");
+        // 継ぎ目の前は古いほうがそのまま
+        assert_eq!(old.gain_at(999), 1.0);
+    }
+
+    #[test]
+    fn cutting_twice_keeps_the_first_seam() {
+        let mut v = Voice {
+            part: 0,
+            start: 0,
+            buf: vec![1.0; 10],
+            done: 0,
+            gen: 1,
+            live: true,
+            pitch: 60,
+            off: None,
+            fade_in: 0,
+            cut: None,
+        };
+        v.cut_at(100);
+        v.cut_at(200);
+        assert_eq!(v.cut.unwrap().0, 100, "継ぎ目が後ろへずれた");
+    }
+
+    #[test]
+    fn releasing_twice_does_not_restart_the_fade() {
+        let mut v = Voice {
+            part: 0,
+            start: 0,
+            buf: vec![0.0; 100_000],
+            done: 0,
+            gen: 1,
+            live: true,
+            pitch: 60,
+            off: None,
+            fade_in: 0,
+            cut: None,
+        };
+        v.release();
+        let first = v.off;
+        assert!(first.is_some());
+        // 半分まで進んだことにして、もう一度離す
+        v.off = Some((first.unwrap().0, first.unwrap().1 / 2));
+        let half = v.off;
+        v.release();
+        assert_eq!(v.off, half, "離し直しで音が戻った");
     }
 }

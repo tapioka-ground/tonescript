@@ -20,3 +20,4 @@ tonescript-engine = { path = "../engine" }
 tonescript-project = { path = "../project" }
 tonescript-midi = { path = "../midi" }
 cpal = "0.15"
+midir = "0.10"

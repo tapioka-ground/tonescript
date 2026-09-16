@@ -36,6 +36,25 @@ use crate::voice::{self, Msg, Voice};
 /// どれだけ先まで作っておくか。
 const LOOKAHEAD: f64 = 0.30;
 
+/// 押した瞬間に作る長さ。**短いほど指と音のずれが小さい。**
+/// ピアノで 0.3 秒ぶんは 4ミリ秒で作れる。
+const FIRST: f32 = 0.30;
+
+/// 作り足すたびに何倍に伸ばすか。
+const GROW: f32 = 3.0;
+
+/// 押しっぱなしで伸ばす上限。
+const LONGEST: f32 = 20.0;
+
+/// 今のぶんの何割の所で次へ乗り換えるか。
+///
+/// 残り4割は「短く作ったものの減衰」が始まる手前の余白。ここより後ろで
+/// 乗り換えると、減衰し始めた音から減衰していない音へ飛んで段差になる。
+const SWAP: f32 = 0.62;
+
+/// 乗り換えるどれだけ前に、次のぶんを作り始めるか。
+const AHEAD: f32 = 0.15;
+
 /// 画面側から係への頼みごと。
 pub enum Cmd {
     /// 曲を差し替える
@@ -44,6 +63,10 @@ pub enum Cmd {
     Plan(Arc<Plan>),
     /// 今すぐ鳴らす（鍵を押した・音符を置いた）
     Live { part: String, pitch: i32, vel: u8, secs: f32 },
+    /// 鍵を離した
+    Off { part: String, pitch: i32 },
+    /// 鍵を押した（離すまで作り足す）
+    Press { part: String, pitch: i32, vel: u8 },
     Quit,
     /// 音圧と尖り止めを測り終えた（裏の測定係から戻ってくる）
     Measured { makeup: f32, trim: Vec<Option<(f32, f32)>> },
@@ -54,6 +77,22 @@ struct Part {
     notes: Vec<Note>,
     /// 次に出す音符
     next: usize,
+}
+
+/// 押されている鍵1つ。離すまで作り足していく。
+struct Held {
+    part: usize,
+    name: String,
+    pitch: i32,
+    vel: u8,
+    /// 押した位置（止まらない時計）
+    press: u64,
+    /// 今なんぼ秒ぶん作ってあるか
+    made: f32,
+    /// 次に乗り換える位置
+    swap: u64,
+    /// もう伸ばせるだけ伸ばした
+    done: bool,
 }
 
 struct Sched {
@@ -68,6 +107,8 @@ struct Sched {
     gen: u64,
     /// ここまで作った（サンプル）
     upto: u64,
+    /// 押されている鍵
+    held: Vec<Held>,
     /// 前に見た再生位置。**戻っていたら**繰り返しの折り返し
     last_pos: u64,
     /// 音圧の測定を頼む先
@@ -222,11 +263,106 @@ impl Sched {
                         done: 0,
                         gen: self.gen,
                         live: false,
+                        pitch: note.pitch,
+                        off: None,
+                        fade_in: 0,
+                        cut: None,
                     }));
                 }
             }
         }
         self.upto = until;
+    }
+
+    /// 鍵を押した。まず短く作って鳴らし、押されているあいだ作り足す。
+    fn press(&mut self, part: &str, pitch: i32, vel: u8) {
+        let Some(song) = self.song.clone() else { return };
+        let Some(pi) = self.plan.part_of(part) else { return };
+        let Some(buf) = voice::render_live(&song, part, pitch, vel, FIRST) else { return };
+        let at = self.shared.clock.load(Ordering::Relaxed) + (0.005 * SR) as u64;
+        self.send(Msg::Voice(Voice {
+            part: pi,
+            start: at,
+            buf,
+            done: 0,
+            gen: self.gen,
+            live: true,
+            pitch,
+            off: None,
+            fade_in: 0,
+            cut: None,
+        }));
+        self.held.retain(|h| !(h.part == pi && h.pitch == pitch));
+        self.held.push(Held {
+            part: pi,
+            name: part.to_string(),
+            pitch,
+            vel,
+            press: at,
+            made: FIRST,
+            swap: at + (FIRST * SWAP * SR) as u64,
+            done: false,
+        });
+    }
+
+    /// 鍵を離した。作り足しも止める。
+    fn lift(&mut self, part: &str, pitch: i32) {
+        let Some(pi) = self.plan.part_of(part) else { return };
+        self.held.retain(|h| !(h.part == pi && h.pitch == pitch));
+        self.send(Msg::Off { part: pi, pitch });
+    }
+
+    /// 押されている鍵の続きを作る。乗り換えの手前で走る。
+    fn extend_held(&mut self) {
+        let Some(song) = self.song.clone() else { return };
+        let clock = self.shared.clock.load(Ordering::Relaxed);
+        let ahead = (AHEAD * SR) as u64;
+        for i in 0..self.held.len() {
+            let (part, pitch, vel, press, made, swap, done) = {
+                let h = &self.held[i];
+                (h.name.clone(), h.pitch, h.vel, h.press, h.made, h.swap, h.done)
+            };
+            if done || clock + ahead < swap {
+                continue;
+            }
+            let next = (made * GROW).min(LONGEST);
+            if next <= made {
+                self.held[i].done = true;
+                continue;
+            }
+            let Some(mut buf) = voice::render_live(&song, &part, pitch, vel, next) else {
+                self.held[i].done = true;
+                continue;
+            };
+            // 乗り換える所までは要らない。そこから先だけ渡す
+            let cut = (swap - press) as usize;
+            if cut >= buf.len() {
+                self.held[i].done = true;
+                continue;
+            }
+            buf.drain(..cut);
+            let pi = self.held[i].part;
+            self.send(Msg::Voice(Voice {
+                part: pi,
+                start: swap,
+                buf,
+                done: 0,
+                gen: self.gen,
+                live: true,
+                pitch,
+                off: None,
+                fade_in: (voice::XFADE * SR) as u32,
+                cut: None,
+            }));
+            // 古いほうはここで終わる
+            self.send(Msg::Cut { part: pi, pitch, at: swap });
+            self.held[i].made = next;
+            self.held[i].swap = press + (next * SWAP * SR) as u64;
+            self.held[i].done = next >= LONGEST;
+        }
+        // とっくに終わったものは忘れる
+        let longest = (LONGEST * SR) as u64;
+        self.held.retain(|h| h.press + longest > clock);
     }
 
     /// 今すぐ鳴らす。画面で音符を触ったときと、鍵を押したとき。
@@ -244,6 +380,10 @@ impl Sched {
             done: 0,
             gen: self.gen,
             live: true,
+            pitch,
+            off: None,
+            fade_in: 0,
+            cut: None,
         }));
     }
 
@@ -274,6 +414,7 @@ pub(crate) fn spawn(
                 pending: Vec::new(),
                 gen: 1,
                 upto: 0,
+                held: Vec::new(),
                 last_pos: 0,
                 back,
             };
@@ -286,6 +427,8 @@ pub(crate) fn spawn(
                         s.send(Msg::Plan(p));
                     }
                     Ok(Cmd::Live { part, pitch, vel, secs }) => s.live(&part, pitch, vel, secs),
+                    Ok(Cmd::Off { part, pitch }) => s.lift(&part, pitch),
+                    Ok(Cmd::Press { part, pitch, vel }) => s.press(&part, pitch, vel),
                     Ok(Cmd::Measured { makeup, trim }) => s.measured(makeup, trim),
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 }
@@ -296,6 +439,7 @@ pub(crate) fn spawn(
                 }
                 s.flush_pending();
                 s.fill_ahead();
+                s.extend_held();
             }
         })
         .expect("係のスレッドが立てられません")

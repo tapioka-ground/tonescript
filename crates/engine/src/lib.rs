@@ -174,6 +174,20 @@ impl Engine {
         });
     }
 
+    /// 鍵を押した。離すまで鳴り続ける。
+    ///
+    /// まず短く作って鳴らし、鳴っているあいだに続きを作り足す
+    /// （[`crate::sched`] を見よ）。押してから音が出るまでは、
+    /// 一番遅い音色でも 15ミリ秒ほど。
+    pub fn key_down(&self, part: &str, pitch: i32, vel: u8) {
+        let _ = self.cmd.send(Cmd::Press { part: part.to_string(), pitch, vel });
+    }
+
+    /// 鍵を離した。短く下げて消す。
+    pub fn key_up(&self, part: &str, pitch: i32) {
+        let _ = self.cmd.send(Cmd::Off { part: part.to_string(), pitch });
+    }
+
     /// 目盛りぶんの長さで1音鳴らす。今のテンポで秒に直す。
     pub fn note_on_steps(&self, part: &str, pitch: i32, vel: u8, steps: u32) {
         let a = self.plan.time_of(0);
