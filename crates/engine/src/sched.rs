@@ -69,6 +69,8 @@ pub enum Cmd {
     Press { part: String, pitch: i32, vel: u8 },
     /// 外で録った音を差し替える
     Audio(Arc<Vec<crate::mixer::Track>>),
+    /// カウントインしてから鳴らす（何拍ぶんか）
+    CountIn(u32),
     Quit,
     /// 音圧と尖り止めを測り終えた（裏の測定係から戻ってくる）
     Measured { makeup: f32, trim: Vec<Option<(f32, f32)>> },
@@ -111,6 +113,8 @@ struct Sched {
     upto: u64,
     /// 押されている鍵
     held: Vec<Held>,
+    /// 次に鳴らすメトロノームの拍（曲の頭から何拍目か）
+    click_next: u64,
     /// 前に見た再生位置。**戻っていたら**繰り返しの折り返し
     last_pos: u64,
     /// 音圧の測定を頼む先
@@ -196,6 +200,7 @@ impl Sched {
             p.next = p.notes.partition_point(|n| plan.sample_of(n.pos) < pos);
         }
         self.pending.clear();
+        self.click_next = 0;
     }
 
     /// 渡す。いっぱいなら持ち越す。
@@ -274,6 +279,7 @@ impl Sched {
             }
         }
         self.upto = until;
+        self.fill_clicks(until);
     }
 
     /// 鍵を押した。まず短く作って鳴らし、押されているあいだ作り足す。
@@ -367,6 +373,83 @@ impl Sched {
         self.held.retain(|h| h.press + longest > clock);
     }
 
+    /// メトロノーム。拍の頭に一打ずつ置く。
+    ///
+    /// 拍の長さは拍子で変わる（6/8 なら8分音符が1拍）ので、小節ごとに
+    /// 数え直す。**小節の頭だけ高く**して、どこに居るか分かるようにする。
+    fn fill_clicks(&mut self, until: u64) {
+        if self.shared.click() <= 0.0 {
+            return;
+        }
+        let Some(song) = self.song.clone() else { return };
+        let plan = self.plan.clone();
+        let bars = song.bars();
+        // 前回どこまで置いたかを「通しの拍数」で覚えている
+        let mut count = 0u64;
+        for bar in 1..=bars {
+            let meter = song.meter_at(bar);
+            let start = song.bar_start(bar);
+            let per = meter.steps_per_beat().max(1);
+            for b in 0..meter.num {
+                if count < self.click_next {
+                    count += 1;
+                    continue;
+                }
+                let at = plan.sample_of(start + b * per);
+                if at > until {
+                    return;
+                }
+                self.click_next = count + 1;
+                count += 1;
+                self.send(Msg::Voice(Voice {
+                    part: crate::mixer::CLICK,
+                    start: at,
+                    buf: voice::click(b == 0),
+                    done: 0,
+                    gen: self.gen,
+                    live: false,
+                    pitch: 0,
+                    off: None,
+                    fade_in: 0,
+                    cut: None,
+                }));
+            }
+        }
+    }
+
+    /// カウントイン。今の位置のテンポで、指定の拍数ぶん先に鳴らす。
+    ///
+    /// 数え終わったら音側が勝手に鳴り始める（[`crate::mixer`] を見よ）。
+    fn count_in(&mut self, beats: u32) {
+        let Some(song) = self.song.clone() else { return };
+        let plan = self.plan.clone();
+        let pos = self.shared.pos.load(Ordering::Relaxed);
+        let bar = song.bar_of_step(0).max(1);
+        let meter = song.meter_at(song.bar_of_step(plan_step(&plan, pos)).max(bar));
+        let per = meter.steps_per_beat().max(1);
+        // 1拍が何サンプルか。今いる所の前後から測る
+        let s0 = plan.sample_of(0);
+        let s1 = plan.sample_of(per);
+        let beat = (s1.saturating_sub(s0)).max(1);
+
+        let clock = self.shared.clock.load(Ordering::Relaxed) + (0.02 * SR) as u64;
+        for i in 0..beats {
+            self.send(Msg::Voice(Voice {
+                part: crate::mixer::CLICK,
+                start: clock + beat * i as u64,
+                buf: voice::click(i % meter.num == 0),
+                done: 0,
+                gen: self.gen,
+                live: true,
+                pitch: 0,
+                off: None,
+                fade_in: 0,
+                cut: None,
+            }));
+        }
+        self.shared.countdown.store(beat * beats as u64, Ordering::Relaxed);
+    }
+
     /// 今すぐ鳴らす。画面で音符を触ったときと、鍵を押したとき。
     fn live(&mut self, part: &str, pitch: i32, vel: u8, secs: f32) {
         let Some(song) = self.song.clone() else { return };
@@ -417,6 +500,7 @@ pub(crate) fn spawn(
                 gen: 1,
                 upto: 0,
                 held: Vec::new(),
+                click_next: 0,
                 last_pos: 0,
                 back,
             };
@@ -432,6 +516,7 @@ pub(crate) fn spawn(
                     Ok(Cmd::Off { part, pitch }) => s.lift(&part, pitch),
                     Ok(Cmd::Press { part, pitch, vel }) => s.press(&part, pitch, vel),
                     Ok(Cmd::Audio(a)) => s.send(Msg::Audio(a)),
+                    Ok(Cmd::CountIn(beats)) => s.count_in(beats),
                     Ok(Cmd::Measured { makeup, trim }) => s.measured(makeup, trim),
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 }
@@ -446,6 +531,17 @@ pub(crate) fn spawn(
             }
         })
         .expect("係のスレッドが立てられません")
+}
+
+/// サンプル位置を目盛りへ。小節を引くときに使う。
+fn plan_step(plan: &Plan, sample: u64) -> u32 {
+    let t = &plan.step_times;
+    let secs = sample as f64 / SR as f64;
+    match t.binary_search_by(|x| x.partial_cmp(&secs).unwrap_or(std::cmp::Ordering::Equal)) {
+        Ok(i) => i as u32,
+        Err(0) => 0,
+        Err(i) => (i - 1) as u32,
+    }
 }
 
 /// 譜面のパート名を並び順で返す。[`Plan`] の番号と合わせるため。

@@ -5,7 +5,7 @@
 //!
 //! 一番大事なのは最後の1つ。**聞こえる音と書き出す音が同じか。**
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use tonescript_dsp::osc::SR;
@@ -38,6 +38,27 @@ const SRC: &str = r#"
     let GAINS = #{ lead: 1.0, bass: 1.0, drums: 1.0 };
     let MIX = #{ lead: #{ width: 0.0, reverb: 0.0, duck: 0.0 } };
 "#;
+
+/// **この試験は1つずつ走らせる。**
+///
+/// どれも「間に合っているか」を時計で測っている。同時に何本も走らせると、
+/// 測っているのは engine ではなく機械の混み具合になる。
+/// 1本ずつ走る限り、これらは何度回しても同じ結果になる。
+static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+
+fn solo() -> MutexGuard<'static, ()> {
+    // 前の試験が落ちて汚れていても、続きは走らせる
+    ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// 設定を変えたあと、音側へ届くのを待つ。
+///
+/// 画面から触った設定は、係を通って音側へ渡る。届くまで数ミリ秒かかる
+/// （鳴らしながら触れるようにした代償で、これは設計どおり）。
+/// 試験で「変えた直後」を測るときは、届くのを待つ。
+fn settle() {
+    std::thread::sleep(Duration::from_millis(60));
+}
 
 fn song() -> (Arc<Song>, Arc<arrange::Score>) {
     let s = tonescript_song::load_str(SRC).expect("曲が読めない");
@@ -76,6 +97,7 @@ fn rms(x: &[f32]) -> f32 {
 
 #[test]
 fn nothing_comes_out_until_play_is_pressed() {
+    let _one = solo();
     let (s, sc) = song();
     let (mut e, mut m) = Engine::new();
     e.set_song(s, sc);
@@ -88,6 +110,7 @@ fn nothing_comes_out_until_play_is_pressed() {
 
 #[test]
 fn pressing_play_makes_sound() {
+    let _one = solo();
     let (s, sc) = song();
     let (mut e, mut m) = Engine::new();
     e.set_song(s, sc);
@@ -101,6 +124,7 @@ fn pressing_play_makes_sound() {
 
 #[test]
 fn a_key_press_sounds_even_while_stopped() {
+    let _one = solo();
     // **これが直したかったこと。** 止まっていても、触った音は返る
     let (s, sc) = song();
     let (mut e, mut m) = Engine::new();
@@ -123,6 +147,7 @@ fn a_key_press_sounds_even_while_stopped() {
 
 #[test]
 fn a_key_sounds_quickly_after_it_is_pressed() {
+    let _one = solo();
     // 押してから音が出るまで。鍵盤は、ここが遅いと弾けない
     let (s, sc) = song();
     let (mut e, mut m) = Engine::new();
@@ -149,6 +174,7 @@ fn a_key_sounds_quickly_after_it_is_pressed() {
 
 #[test]
 fn a_long_hold_is_seamless() {
+    let _one = solo();
     // 押しっぱなしにすると、裏で作り足して繋いでいく。
     // **繋ぎ目で切れたり、跳ねたりしないこと。**
     let (s, sc) = song();
@@ -191,6 +217,7 @@ fn a_long_hold_is_seamless() {
 
 #[test]
 fn a_held_key_keeps_sounding_until_it_is_released() {
+    let _one = solo();
     // 鍵盤を挿したときの道。押したら鳴り続け、離したら消える
     let (s, sc) = song();
     let (mut e, mut m) = Engine::new();
@@ -216,6 +243,7 @@ fn a_held_key_keeps_sounding_until_it_is_released() {
 
 #[test]
 fn releasing_a_different_key_does_not_stop_this_one() {
+    let _one = solo();
     let (s, sc) = song();
     let (mut e, mut m) = Engine::new();
     e.set_song(s, sc);
@@ -231,6 +259,7 @@ fn releasing_a_different_key_does_not_stop_this_one() {
 
 #[test]
 fn a_fader_moves_while_it_is_playing() {
+    let _one = solo();
     // 鳴らしたまま音量を変えて、本当に変わるか
     let (s, sc) = song();
     let (mut e, mut m) = Engine::new();
@@ -254,6 +283,7 @@ fn a_fader_moves_while_it_is_playing() {
 
 #[test]
 fn muting_a_part_takes_effect_at_once() {
+    let _one = solo();
     let (s, sc) = song();
     let (mut e, mut m) = Engine::new();
     e.set_song(s, sc);
@@ -273,6 +303,7 @@ fn muting_a_part_takes_effect_at_once() {
 
 #[test]
 fn seeking_starts_from_there_and_drops_the_old_sound() {
+    let _one = solo();
     let (s, sc) = song();
     let (mut e, mut m) = Engine::new();
     e.set_song(s, sc);
@@ -289,6 +320,7 @@ fn seeking_starts_from_there_and_drops_the_old_sound() {
 
 #[test]
 fn the_end_of_the_song_stops_it() {
+    let _one = solo();
     let (s, sc) = song();
     let (mut e, mut m) = Engine::new();
     e.set_song(s, sc);
@@ -304,6 +336,7 @@ fn the_end_of_the_song_stops_it() {
 
 #[test]
 fn a_loop_keeps_coming_back() {
+    let _one = solo();
     let (s, sc) = song();
     let (mut e, mut m) = Engine::new();
     e.set_song(s, sc);
@@ -322,6 +355,7 @@ fn a_loop_keeps_coming_back() {
 
 #[test]
 fn recorded_audio_plays_and_stops_with_the_transport() {
+    let _one = solo();
     use std::sync::Arc as A;
     let (s, sc) = song();
     let (mut e, mut m) = Engine::new();
@@ -332,6 +366,7 @@ fn recorded_audio_plays_and_stops_with_the_transport() {
         e.set_audible(p, false);
     }
     e.set_master_gain(1.0);
+    settle();
 
     let n = (2.0 * SR) as usize;
     let tone: Vec<f32> =
@@ -373,6 +408,7 @@ fn recorded_audio_plays_and_stops_with_the_transport() {
 
 #[test]
 fn recorded_audio_lines_up_with_the_song() {
+    let _one = solo();
     use std::sync::Arc as A;
     let (s, sc) = song();
     let (mut e, mut m) = Engine::new();
@@ -381,6 +417,7 @@ fn recorded_audio_lines_up_with_the_song() {
     for p in ["lead", "bass", "drums", "perc"] {
         e.set_audible(p, false);
     }
+    settle();
     // 頭の 0.5 秒は無音、そのあとだけ鳴る音を用意する
     let quiet = (0.5 * SR) as usize;
     let mut buf = vec![0.0f32; quiet];
@@ -409,7 +446,111 @@ fn recorded_audio_lines_up_with_the_song() {
 }
 
 #[test]
+fn the_metronome_ticks_on_the_beat() {
+    let _one = solo();
+    let (s, sc) = song();
+    let (mut e, mut m) = Engine::new();
+    e.set_song(s, sc);
+    std::thread::sleep(Duration::from_millis(80));
+    // 譜面は黙らせて、メトロノームだけを見る
+    for p in ["lead", "bass", "drums", "perc"] {
+        e.set_audible(p, false);
+    }
+    settle();
+    // まず、切ってあれば鳴らない
+    e.play();
+    let (off, _) = pull(&mut m, 20, 1024, Duration::from_millis(3));
+    assert!(peak(&off) < 1e-4, "切ってあるのに鳴った: {}", peak(&off));
+
+    e.stop();
+    e.seek(0);
+    e.set_click(1.0);
+    std::thread::sleep(Duration::from_millis(60));
+    e.play();
+    // 120BPM の4分音符 = 0.5秒ごと。2秒ぶんで4打
+    let (on, _) = pull(&mut m, 100, 1024, Duration::from_millis(2));
+    assert!(peak(&on) > 0.05, "メトロノームが鳴っていない");
+
+    // 打点の数を数える。0.5秒ごとに山があること
+    let win = (0.05 * SR) as usize;
+    let mut hits = Vec::new();
+    for beat in 0..4 {
+        let at = (beat as f32 * 0.5 * SR) as usize;
+        if at + win < on.len() {
+            hits.push(peak(&on[at..at + win]));
+        }
+    }
+    assert!(hits.len() >= 3, "測れるだけ鳴っていない");
+    for (i, h) in hits.iter().enumerate() {
+        assert!(*h > 0.05, "{i} 拍目に打点が無い（{h}）");
+    }
+    // 拍の間は静か
+    let between = (0.25 * SR) as usize;
+    assert!(
+        peak(&on[between..between + win]) < hits[0] * 0.5,
+        "拍と拍のあいだでも鳴りっぱなし"
+    );
+}
+
+#[test]
+fn counting_in_starts_the_song_by_itself() {
+    let _one = solo();
+    let (s, sc) = song();
+    let (mut e, mut m) = Engine::new();
+    e.set_song(s, sc);
+    std::thread::sleep(Duration::from_millis(80));
+    e.set_click(1.0);
+
+    // 4拍数えてから鳴り始める。120BPM なら 2 秒
+    e.play_after_count(4);
+    std::thread::sleep(Duration::from_millis(60));
+    assert!(e.counting_in(), "数え始めていない");
+    assert!(!e.is_playing(), "数える前に鳴り出した");
+
+    // 1秒ぶん回しても、まだ曲は進んでいない
+    pull(&mut m, 47, 1024, Duration::from_millis(1));
+    assert_eq!(e.position(), 0, "数えている最中に曲が進んだ");
+
+    // 残りを回すと、勝手に鳴り始める
+    pull(&mut m, 60, 1024, Duration::from_millis(1));
+    assert!(!e.counting_in(), "数え終わっていない");
+    assert!(e.is_playing(), "数え終わったのに鳴り始めない");
+    assert!(e.position() > 0, "位置が進んでいない");
+}
+
+#[test]
+fn a_count_in_can_be_called_off() {
+    let _one = solo();
+    let (s, sc) = song();
+    let (mut e, mut m) = Engine::new();
+    e.set_song(s, sc);
+    std::thread::sleep(Duration::from_millis(60));
+    e.play_after_count(8);
+    std::thread::sleep(Duration::from_millis(40));
+    assert!(e.counting_in());
+    e.cancel_count();
+    pull(&mut m, 20, 1024, Duration::from_millis(1));
+    assert!(!e.counting_in());
+    assert!(!e.is_playing(), "やめたのに鳴り出した");
+    assert_eq!(e.position(), 0);
+}
+
+#[test]
+fn the_metronome_never_reaches_the_file() {
+    let _one = solo();
+    // メトロノームは聞くためだけのもの。書き出しには入らない
+    let (s, sc) = song();
+    let quiet = |_: &str| {};
+    let mut stems = tonescript_render::render_stems(&s, &sc, &quiet);
+    let out = tonescript_render::mix_down(&s, &mut stems, &sc, &quiet);
+    // 書き出し側にはメトロノームという言葉も無い（パートとして出てこない）
+    assert!(!stems.contains_key("click"), "書き出しにメトロノームが入っている");
+    assert!(out.len() > 0);
+}
+
+#[test]
 fn the_meters_say_what_actually_came_out() {
+    let _one = solo();
     let (s, sc) = song();
     let (mut e, mut m) = Engine::new();
     e.set_song(s, sc);
@@ -437,6 +578,7 @@ fn the_meters_say_what_actually_came_out() {
 
 #[test]
 fn the_loudness_meter_agrees_with_the_audio_it_measured() {
+    let _one = solo();
     // 音圧計は 400ミリ秒の窓で今の音圧を出す。同じ音を書き出し側の物差しで
     // 測ったものと合うこと。
     //
@@ -460,6 +602,7 @@ fn the_loudness_meter_agrees_with_the_audio_it_measured() {
 
 #[test]
 fn what_you_hear_is_what_gets_written() {
+    let _one = solo();
     // **この作りで一番大事な確かめ。**
     //
     // 鳴らしながら作った音と、書き出した音が同じ形になること。作る所を

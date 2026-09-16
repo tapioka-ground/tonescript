@@ -52,6 +52,10 @@ pub struct Shared {
     pub loop_to: AtomicU64,
     /// 曲の終わりまで来たか（画面が見て止める）
     pub hit_end: AtomicBool,
+    /// カウントインの残り（サンプル）。0 になったら鳴り始める
+    pub countdown: AtomicU64,
+    /// メトロノームの音量（f32 のビット）。0 で鳴らさない
+    pub click: AtomicU32,
     /// 書き出したときと同じ音圧で聞くための倍率（f32 のビット）。
     /// 曲を読んだあとに裏で1回測って入る。[`crate::sched`] を見よ
     pub makeup: AtomicU32,
@@ -67,6 +71,10 @@ impl Shared {
     pub fn set_makeup(&self, g: f32) {
         self.makeup.store(g.to_bits(), Ordering::Relaxed);
     }
+
+    pub fn click(&self) -> f32 {
+        f32::from_bits(self.click.load(Ordering::Relaxed))
+    }
 }
 
 impl Default for Shared {
@@ -80,6 +88,8 @@ impl Default for Shared {
             hit_end: AtomicBool::new(false),
             makeup: AtomicU32::new(1.0f32.to_bits()),
             clock: AtomicU64::new(0),
+            countdown: AtomicU64::new(0),
+            click: AtomicU32::new(0f32.to_bits()),
         }
     }
 }
@@ -176,6 +186,12 @@ struct Lanes {
     duck: f32,
 }
 
+/// メトロノームの一打は、この番号を付けて渡す。
+///
+/// パートではないので、音量も広がりも残響も掛からない。**書き出しにも
+/// 入らない。** 聞くためだけのもの。
+pub const CLICK: usize = usize::MAX;
+
 const MAX_BLOCK: usize = 8192;
 /// パートの上限。針の数もこれに合わせる
 pub const MAX_PARTS: usize = 64;
@@ -192,6 +208,8 @@ pub struct Mixer {
     acc: Vec<Vec<f32>>,
     /// 残響へ送るぶん
     send: Vec<f32>,
+    /// メトロノームの置き場。パートとは別に混ぜる
+    click: Vec<f32>,
     reverb: Reverb,
     duck: Duck,
     cursor: StepCursor,
@@ -237,6 +255,7 @@ impl Mixer {
             voices: Vec::with_capacity(MAX_VOICES),
             acc: (0..MAX_PARTS).map(|_| vec![0.0; MAX_BLOCK]).collect(),
             send: vec![0.0; MAX_BLOCK],
+            click: vec![0.0; MAX_BLOCK],
             reverb: Reverb::new(secs, spread),
             duck,
             cursor: StepCursor::default(),
@@ -357,7 +376,11 @@ impl Mixer {
         if self.send.len() < n {
             self.send.resize(n, 0.0);
         }
+        if self.click.len() < n {
+            self.click.resize(n, 0.0);
+        }
         self.send[..n].fill(0.0);
+        self.click[..n].fill(0.0);
         out_l[..n].fill(0.0);
         out_r[..n].fill(0.0);
 
@@ -367,7 +390,12 @@ impl Mixer {
         for v in self.voices.iter_mut() {
             let base = if v.live { clock } else { pos };
             let end = base + n as u64;
-            if v.part >= np || (!play && !v.live) || v.start >= end || v.end() <= base {
+            let is_click = v.part == CLICK;
+            if (!is_click && v.part >= np)
+                || (!play && !v.live)
+                || v.start >= end
+                || v.end() <= base
+            {
                 continue;
             }
             let from = v.start.max(base);
@@ -376,7 +404,11 @@ impl Mixer {
             let take = ((v.end().min(end) - from) as usize)
                 .min(v.buf.len().saturating_sub(skip))
                 .min(n - at);
-            let dst = &mut self.acc[v.part][at..at + take];
+            let dst = if is_click {
+                &mut self.click[at..at + take]
+            } else {
+                &mut self.acc[v.part][at..at + take]
+            };
             let src = &v.buf[skip..skip + take];
             // 立ち上がり・継ぎ目・離した後。何も無ければ素通し
             let shaped = v.fade_in > 0 || v.cut.is_some() || v.off.is_some();
@@ -505,6 +537,16 @@ impl Mixer {
             }
         }
 
+        // メトロノーム。曲ではないので、パートの音量も残響も掛からない
+        let cg = self.shared.click();
+        if cg > 0.0 {
+            for i in 0..n {
+                let v = self.click[i] * cg;
+                out_l[i] += v;
+                out_r[i] += v;
+            }
+        }
+
         // 音圧と天井
         let g = plan.master_gain * self.shared.makeup();
         let (mut pl, mut pr) = (0.0f32, 0.0f32);
@@ -526,6 +568,16 @@ impl Mixer {
         if !self.shared.playing.load(Ordering::Relaxed) || self.plan.total == 0 {
             let pos = self.shared.pos.load(Ordering::Relaxed);
             self.block(pos, n, false, &mut out_l[..n], &mut out_r[..n]);
+            // カウントイン。数え終わったらそのまま鳴り始める
+            let left = self.shared.countdown.load(Ordering::Relaxed);
+            if left > 0 {
+                let left = left.saturating_sub(n as u64);
+                self.shared.countdown.store(left, Ordering::Relaxed);
+                if left == 0 && self.plan.total > 0 {
+                    self.shared.hit_end.store(false, Ordering::Relaxed);
+                    self.shared.playing.store(true, Ordering::Relaxed);
+                }
+            }
             self.tick(n);
             self.measure_loudness(&out_l[..n], &out_r[..n]);
             self.retire();

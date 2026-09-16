@@ -133,6 +133,10 @@ struct App {
     taking_audio: Option<rec::Rec>,
     /// 入力の針
     in_level: f32,
+    /// カウントインの拍数。0 なら数えない
+    count_in: u32,
+    /// 叩いて速さを決めるやつ
+    tap: settings::Tap,
     /// 見つかっている録る口
     in_ports: Vec<String>,
     in_ports_at: Option<std::time::Instant>,
@@ -189,6 +193,8 @@ impl Default for App {
             last_frame: None,
             clip: sel::Clip::default(),
             taking_audio: None,
+            count_in: 4,
+            tap: settings::Tap::default(),
             in_level: 0.0,
             in_ports: Vec::new(),
             in_ports_at: None,
@@ -660,6 +666,12 @@ impl App {
             self.status = "音の出口が開けません（書き出しはできます）".into();
             return;
         }
+        if self.engine.counting_in() {
+            // 数えている最中にもう一度押したら、やめる
+            self.engine.cancel_count();
+            self.status = "数えるのをやめました".into();
+            return;
+        }
         if self.engine.is_playing() {
             // 止めたら、止めた所を覚える
             self.head = self.sec_to_step(self.engine.seconds());
@@ -667,7 +679,14 @@ impl App {
             return;
         }
         self.engine.seek(self.sample_of(self.head));
-        self.engine.play();
+        if self.count_in > 0 && self.engine.click() > 0.0 {
+            // メトロノームを鳴らしているときだけ数える。
+            // 切ってあるのに黙って待たされるのは、ただ遅いだけ
+            self.engine.play_after_count(self.count_in);
+            self.status = format!("{} 拍数えます", self.count_in);
+        } else {
+            self.engine.play();
+        }
     }
 
     /// 譜面の編集に効く鍵。
@@ -1210,6 +1229,9 @@ impl eframe::App for App {
             self.head = self.sec_to_step(self.engine.seconds());
             ctx.request_repaint();
         }
+        if self.engine.counting_in() {
+            ctx.request_repaint();
+        }
         if self.engine.took_end() {
             self.status = "終わりまで鳴らしました".into();
         }
@@ -1467,7 +1489,24 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                 ui.label("BPM");
                 ui.horizontal(|ui| {
                     ui.add(egui::DragValue::new(&mut d.bpm).range(20.0..=400.0).speed(1.0));
-                    ui.label(theme::dim("曲の速さ。途中で変えるには TEMPO_MAP を書く"));
+                    // 数で分からないときは叩いて決める
+                    if ui
+                        .button("叩く")
+                        .on_hover_text("曲に合わせて4回ほど叩くと、その速さが入る")
+                        .clicked()
+                    {
+                        if let Some(bpm) = app.tap.hit() {
+                            d.bpm = (bpm * 10.0).round() / 10.0;
+                        }
+                    }
+                    let n = app.tap.taps();
+                    if n > 0 {
+                        ui.label(theme::dim(&format!("{} 回", n + 1)));
+                        if ui.small_button("消す").clicked() {
+                            app.tap.clear();
+                        }
+                    }
+                    ui.label(theme::dim("途中で変えるには TEMPO_MAP を書く"));
                 });
                 ui.end_row();
 
@@ -1872,7 +1911,13 @@ impl App {
                     if ui
                         .add_enabled(
                             self.song.is_some() && self.out.error.is_none(),
-                            egui::Button::new(if playing { "■ 止める" } else { "▶ 鳴らす" }),
+                            egui::Button::new(if self.engine.counting_in() {
+                                "… 数えています"
+                            } else if playing {
+                                "■ 止める"
+                            } else {
+                                "▶ 鳴らす"
+                            }),
                         )
                         .on_hover_text("Space")
                         .clicked()
@@ -1947,6 +1992,25 @@ impl App {
                         if n > 0 {
                             ui.label(theme::dim(&format!("{n} 押下")));
                         }
+                    }
+                    ui.separator();
+                    // メトロノーム
+                    let click_on = self.engine.click() > 0.0;
+                    if ui
+                        .selectable_label(click_on, "拍")
+                        .on_hover_text("メトロノーム。伴奏なしで歌うときに要る")
+                        .clicked()
+                    {
+                        self.engine.set_click(if click_on { 0.0 } else { 0.8 });
+                    }
+                    if click_on {
+                        ui.add(
+                            egui::DragValue::new(&mut self.count_in)
+                                .speed(0.1)
+                                .range(0..=8)
+                                .suffix(" 拍前"),
+                        )
+                        .on_hover_text("鳴らす前に数える拍数。0 なら数えない");
                     }
                     ui.separator();
                     // 録音

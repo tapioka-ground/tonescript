@@ -161,6 +161,26 @@ pub fn render_live(song: &Song, part: &str, pitch: i32, vel: u8, secs: f32) -> O
     tonescript_render::render_note(song, &Cfg::default(), part, &note, 0, n, ring).map(|(_, w)| w)
 }
 
+/// メトロノームの一打。
+///
+/// **これは曲の一部ではない。** 書き出しには入らないので、譜面の音とは
+/// 別の入れ物（[`crate::mixer::CLICK`]）へ流す。
+///
+/// 表拍（小節の頭）は高く硬く、裏は低く軽く。同じ音だと小節の頭が
+/// 分からず、カウントインで入る所を外す。
+pub fn click(accent: bool) -> Vec<f32> {
+    let (hz, secs, amp) = if accent { (1800.0, 0.035, 0.5) } else { (1200.0, 0.028, 0.32) };
+    let n = (secs * SR) as usize;
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let t = i as f32 / SR;
+        // 一瞬で立ち上げて、すぐ落とす。伸ばすと拍の頭が鈍る
+        let env = (-t * if accent { 90.0 } else { 120.0 }).exp();
+        out.push((t * std::f32::consts::TAU * hz).sin() * env * amp);
+    }
+    out
+}
+
 /// 音側へ渡すもの。
 #[derive(Debug)]
 pub enum Msg {

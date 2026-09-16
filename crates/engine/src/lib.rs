@@ -115,6 +115,38 @@ impl Engine {
         let _ = g;
     }
 
+    /// メトロノームを鳴らすか。0 で止める。
+    pub fn set_click(&self, gain: f32) {
+        self.shared.click.store(gain.clamp(0.0, 4.0).to_bits(), Ordering::Relaxed);
+    }
+
+    pub fn click(&self) -> f32 {
+        f32::from_bits(self.shared.click.load(Ordering::Relaxed))
+    }
+
+    /// 数えてから鳴らす。数え終わると勝手に鳴り始める。
+    ///
+    /// 伴奏なしで歌うとき、これが無いと頭が取れない。
+    pub fn play_after_count(&self, beats: u32) {
+        if beats == 0 {
+            self.play();
+            return;
+        }
+        self.shared.playing.store(false, Ordering::Relaxed);
+        self.shared.hit_end.store(false, Ordering::Relaxed);
+        let _ = self.cmd.send(Cmd::CountIn(beats));
+    }
+
+    /// 数えている最中か。
+    pub fn counting_in(&self) -> bool {
+        self.shared.countdown.load(Ordering::Relaxed) > 0
+    }
+
+    /// 数えるのをやめる。
+    pub fn cancel_count(&self) {
+        self.shared.countdown.store(0, Ordering::Relaxed);
+    }
+
     pub fn play(&self) {
         self.shared.hit_end.store(false, Ordering::Relaxed);
         self.shared.playing.store(true, Ordering::Relaxed);

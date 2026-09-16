@@ -126,6 +126,72 @@ fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
     std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// 叩いて速さを決める。
+///
+/// 叩いた間隔の**真ん中の値**を採る。平均だと、1回もたついただけで全体が
+/// 引っ張られる。人は必ず1回はもたつく。
+#[derive(Default, Debug)]
+pub struct Tap {
+    /// 叩いた間隔（秒）。新しいものが後ろ
+    gaps: Vec<f32>,
+    last: Option<std::time::Instant>,
+}
+
+/// これだけ空いたら、数え直し。
+const TAP_RESET: f32 = 2.5;
+/// 覚えておく間隔の数。
+const TAP_KEEP: usize = 8;
+
+impl Tap {
+    /// 叩いた。今の見立てを返す（まだ決まらなければ `None`）。
+    pub fn hit(&mut self) -> Option<f32> {
+        let now = std::time::Instant::now();
+        if let Some(prev) = self.last {
+            let gap = now.duration_since(prev).as_secs_f32();
+            if gap > TAP_RESET {
+                // 間が空いた。前のは忘れる
+                self.gaps.clear();
+            } else {
+                self.gaps.push(gap);
+                if self.gaps.len() > TAP_KEEP {
+                    self.gaps.remove(0);
+                }
+            }
+        }
+        self.last = Some(now);
+        bpm_of(&self.gaps)
+    }
+
+    /// 何回ぶん溜まっているか。画面に出す。
+    pub fn taps(&self) -> usize {
+        self.gaps.len()
+    }
+
+    pub fn clear(&mut self) {
+        self.gaps.clear();
+        self.last = None;
+    }
+}
+
+/// 間隔から速さを出す。**2回叩くまでは決めない。**
+pub fn bpm_of(gaps: &[f32]) -> Option<f32> {
+    if gaps.len() < 2 {
+        return None;
+    }
+    let mut v: Vec<f32> = gaps.iter().copied().filter(|g| *g > 0.05).collect();
+    if v.len() < 2 {
+        return None;
+    }
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let mid = if v.len() % 2 == 1 {
+        v[v.len() / 2]
+    } else {
+        (v[v.len() / 2 - 1] + v[v.len() / 2]) * 0.5
+    };
+    let bpm = 60.0 / mid;
+    (20.0..=400.0).contains(&bpm).then_some(bpm)
+}
+
 /// 新しいセクションの雛形。
 pub fn new_section(name: &str, meter: Meter) -> Section {
     Section {
@@ -196,6 +262,50 @@ mod tests {
         )
         .unwrap();
         p
+    }
+
+    #[test]
+    fn two_taps_are_not_enough_to_decide() {
+        // 1回叩いただけでは間隔が無い。2つ目の間隔が来てから決める
+        assert_eq!(bpm_of(&[]), None);
+        assert_eq!(bpm_of(&[0.5]), None);
+        assert!(bpm_of(&[0.5, 0.5]).is_some());
+    }
+
+    #[test]
+    fn steady_tapping_gives_the_tempo() {
+        // 0.5 秒おき = 120
+        let got = bpm_of(&[0.5, 0.5, 0.5]).unwrap();
+        assert!((got - 120.0).abs() < 0.01, "{got}");
+        // 0.4 秒おき = 150
+        let got = bpm_of(&[0.4, 0.4, 0.4, 0.4]).unwrap();
+        assert!((got - 150.0).abs() < 0.01, "{got}");
+    }
+
+    #[test]
+    fn one_stumble_does_not_drag_the_whole_thing() {
+        // 1回だけ大きく外しても、真ん中の値なら動かない
+        let steady = bpm_of(&[0.5, 0.5, 0.5, 0.5, 0.5]).unwrap();
+        let stumble = bpm_of(&[0.5, 0.5, 1.1, 0.5, 0.5]).unwrap();
+        assert!((steady - stumble).abs() < 1.0, "{steady} が {stumble} になった");
+    }
+
+    #[test]
+    fn nonsense_tapping_is_refused() {
+        // 速すぎ・遅すぎは決めない。黙って変な値を入れるより良い
+        assert_eq!(bpm_of(&[0.01, 0.01]), None, "叩き間違いを速さにした");
+        assert_eq!(bpm_of(&[5.0, 5.0]), None, "遅すぎるのに決めた");
+    }
+
+    #[test]
+    fn a_long_pause_starts_over() {
+        let mut t = Tap::default();
+        t.hit();
+        assert_eq!(t.taps(), 0);
+        t.gaps = vec![0.5, 0.5];
+        t.last = Some(std::time::Instant::now() - std::time::Duration::from_secs(4));
+        t.hit();
+        assert_eq!(t.taps(), 0, "間が空いたのに前の叩きが残っている");
     }
 
     #[test]
