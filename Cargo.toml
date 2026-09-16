@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/dsp", "crates/song", "crates/render", "crates/project", "crates/midi", "crates/cli", "crates/app"]
+members = ["crates/dsp", "crates/song", "crates/render", "crates/engine", "crates/project", "crates/midi", "crates/cli", "crates/app"]
 
 [workspace.dependencies]
 rayon = "1.10"

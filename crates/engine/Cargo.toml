@@ -1,0 +1,12 @@
+[package]
+name = "tonescript-engine"
+description = "鳴らしながら計算する。リアルタイム合成と、音を出す側のミキサー。"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+tonescript-dsp = { path = "../dsp" }
+tonescript-song = { path = "../song" }
+tonescript-render = { path = "../render" }

@@ -150,6 +150,9 @@ pub struct Touched {
     pub loop_set: Option<(f32, f32)>,
     /// 繰り返しを解いてほしい
     pub loop_clear: bool,
+    /// 触った音を鳴らしてほしい `(パート, 音程, 強さ, 長さ)`。
+    /// 置いた・掴んだ・音程を変えたときに入る
+    pub hit: Option<(String, i32, u8, u32)>,
 }
 
 /// 再生の様子。画面から渡してもらう。
@@ -509,6 +512,7 @@ fn handle_input(
         if let Some(i) = hit(project) {
             let n = &project.notes[&ed.part][i];
             let right = v.x_of((n.pos + n.len.max(1)) as f32);
+            out.hit = Some((ed.part.clone(), n.pitch, n.vel, n.len));
             ed.selected = Some((ed.part.clone(), i));
             ed.grab = if (right - pos.x).abs() <= EDGE {
                 Grab::Resize { part: ed.part.clone(), index: i }
@@ -541,6 +545,11 @@ fn handle_input(
                     if let Some(n) = ns.get_mut(index) {
                         let np = np.min(total.saturating_sub(n.len.max(1)));
                         if n.pos != np || n.pitch != pitch {
+                            // 音程が動いたら、その音を返す。掴んだまま
+                            // 上下すれば音階が聞こえる
+                            if n.pitch != pitch {
+                                out.hit = Some((part.clone(), pitch, n.vel, n.len));
+                            }
                             n.pos = np;
                             n.pitch = pitch.clamp(0, 127);
                             out.changed = true;
@@ -578,6 +587,8 @@ fn handle_input(
     if resp.clicked() {
         ensure(project, ed);
         if let Some(i) = hit(project) {
+            let n = &project.notes[&ed.part][i];
+            out.hit = Some((ed.part.clone(), n.pitch, n.vel, n.len));
             ed.selected = Some((ed.part.clone(), i));
             return;
         }
@@ -591,6 +602,7 @@ fn handle_input(
             &ed.part,
             Note { pos: at, len, pitch, vel: 100, mora: String::new() },
         );
+        out.hit = Some((ed.part.clone(), pitch, 100, len));
         // 置いたものを選んだことにする
         ed.selected = project.notes[&ed.part]
             .iter()

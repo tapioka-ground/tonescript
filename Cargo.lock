@@ -2438,6 +2438,7 @@ dependencies = [
  "eframe",
  "egui",
  "tonescript-dsp",
+ "tonescript-engine",
  "tonescript-midi",
  "tonescript-project",
  "tonescript-render",
@@ -2449,6 +2450,15 @@ name = "tonescript-dsp"
 version = "0.1.0"
 dependencies = [
  "rayon",
+]
+
+[[package]]
+name = "tonescript-engine"
+version = "0.1.0"
+dependencies = [
+ "tonescript-dsp",
+ "tonescript-render",
+ "tonescript-song",
 ]
 
 [[package]]

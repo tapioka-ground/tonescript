@@ -2,7 +2,8 @@
 
 A DAW whose project file is text. 46 instruments, zero samples. Free, MIT.
 
-Piano roll, playback, automation, undo, autosave, MIDI in and out.
+Piano roll, automation, undo, autosave, MIDI in and out.
+Notes sound the moment you place them — a real-time engine, not a re-render.
 Every sound is computed — filters, reverb, mastering, all from scratch.
 No plugins, no sample libraries. A 34-second track renders in 0.24s.
 
@@ -46,6 +47,7 @@ tone patches            list the 46 instruments
 crates/dsp/      oscillators, envelopes, filters, 46 instruments, 11 drums, reverb
 crates/song/     song files (Rhai), time signatures, automation
 crates/render/   arrangement, synthesis, mixing, mastering, WAV
+crates/engine/   real-time playback: scheduler, lock-free queue, mixer
 crates/project/  edit state, autosave, undo
 crates/midi/     MIDI read/write
 crates/cli/      the `tone` command
@@ -102,7 +104,7 @@ interpolation above, which is the improvement.
 The 21× on `highpass` is where Python's cleverness disappeared: an FFT
 convolution became a three-line loop.
 
-275 tests.
+311 tests.
 
 ## Not ported
 
@@ -121,7 +123,8 @@ make with it, nor any samples or voice banks you supply.
 
 プロジェクトファイルがテキストの DAW。楽器46種、音源ゼロ。無料・MIT。
 
-ピアノロール、再生、オートメーション、取り消し、自動保存、MIDI の読み書き。
+ピアノロール、オートメーション、取り消し、自動保存、MIDI の読み書き。
+置いた音はその場で鳴る。作り直して鳴らすのではなく、鳴らしながら作っている。
 
 音は全部計算で作っている。フィルタも残響もマスタリングも自前で、
 プラグインも音源ライブラリも使わない。34秒の曲が 0.24 秒でできる。
@@ -162,6 +165,7 @@ tone patches            46音色の一覧
 crates/dsp/      発振器・エンベロープ・フィルタ・46音色・11ドラム・残響
 crates/song/     曲ファイル（Rhai）、拍子、オートメーション
 crates/render/   編曲・合成・ミックス・マスタリング・WAV
+crates/engine/   鳴らしながら計算する側。先回り係・待たない受け渡し・ミキサー
 crates/project/  編集の状態、自動保存、取り消し
 crates/midi/     MIDI の読み書き
 crates/cli/      tone コマンド
@@ -218,7 +222,7 @@ AI に書かせるなら「SONGFILE.ja.md に従って songs/x.rhai を書いて
 `highpass` の21倍が「Python の賢さが消えた」ところ。FFT 畳み込みが
 3行のループになった。
 
-テスト 275 件。
+テスト 311 件。
 
 ## 移植しなかったもの
 

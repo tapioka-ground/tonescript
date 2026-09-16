@@ -31,7 +31,7 @@ pub type Stems = HashMap<String, Vec<f32>>;
 pub type Progress<'a> = &'a (dyn Fn(&str) + Sync);
 
 /// MIDI のドラム番号 -> 音の作り方。Python 版の `DRUMS` と同じ割り当て。
-fn drum_voice(note: i32, n: usize, vel: f32, seed: u64, kick: &drum::KickCfg) -> Vec<f32> {
+pub fn drum_voice(note: i32, n: usize, vel: f32, seed: u64, kick: &drum::KickCfg) -> Vec<f32> {
     match note {
         35 => drum::hardkick(n, vel, seed, kick, None), // 歪んだキック
         36 => drum::kick(n, vel, seed),
@@ -52,7 +52,10 @@ fn drum_voice(note: i32, n: usize, vel: f32, seed: u64, kick: &drum::KickCfg) ->
 }
 
 /// 1本の音符を音にする。
-fn render_note(
+///
+/// 鍵を握ったときに鳴らす側（`tonescript-engine`）もこれを呼ぶ。
+/// **書き出しと聞こえ方が違わないよう、作る所は1つにする。**
+pub fn render_note(
     song: &Song,
     cfg: &Cfg,
     part: &str,

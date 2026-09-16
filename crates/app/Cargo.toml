@@ -16,6 +16,7 @@ egui = "0.29"
 tonescript-dsp = { path = "../dsp" }
 tonescript-song = { path = "../song" }
 tonescript-render = { path = "../render" }
+tonescript-engine = { path = "../engine" }
 tonescript-project = { path = "../project" }
 tonescript-midi = { path = "../midi" }
 cpal = "0.15"

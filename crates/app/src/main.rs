@@ -23,7 +23,7 @@ mod settings;
 mod theme;
 
 use edit::{Editor, Transport};
-use play::Player;
+use tonescript_engine::Engine;
 use tonescript_project::store::{Autosaver, Store};
 use tonescript_project::{History, Project, Tag};
 use std::path::Path;
@@ -32,6 +32,7 @@ use tonescript_song::model::{Lane, Meter};
 use tonescript_song::Song;
 use std::path::PathBuf;
 use std::sync::mpsc;
+use std::sync::Arc;
 
 fn songs_dir() -> PathBuf {
     std::env::var("TONESCRIPT_SONGS").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("songs"))
@@ -91,16 +92,16 @@ struct App {
     zoom: f32,
     scroll: f32,
 
-    /// 音の出口
-    player: Player,
+    /// 鳴らす側。譜面と設定を渡すと、鳴らしながら作る
+    engine: Engine,
+    /// 音の出口（cpal）。開けなくても編集と書き出しは続けられる
+    out: play::Out,
     /// 再生ヘッドの位置（目盛り）。止まっている間もここを覚えている
     head: f32,
     /// 繰り返す範囲（目盛り）
     loop_range: Option<(f32, f32)>,
     /// 目盛り -> 秒 の対応。曲を読むたびに作り直す
     step_times: Vec<f64>,
-    /// 鳴らす音がいま持っているものと合っているか
-    clip_fresh: bool,
     /// 画面が再生に追いて動くか
     follow: bool,
 
@@ -121,6 +122,9 @@ struct App {
 
 impl Default for App {
     fn default() -> Self {
+        // 鳴らす側と、音の出口。出口が開かなくても engine は動く
+        let (engine, mixer) = Engine::new();
+        let out = play::Out::start(mixer);
         let mut app = Self {
             screen: Screen::Browser,
             entries: Vec::new(),
@@ -136,11 +140,11 @@ impl Default for App {
             ed: Editor::default(),
             zoom: 12.0,
             scroll: 0.0,
-            player: Player::new(),
+            engine,
+            out,
             head: 0.0,
             loop_range: None,
             step_times: Vec::new(),
-            clip_fresh: false,
             follow: true,
             log: Vec::new(),
             rx: None,
@@ -230,11 +234,10 @@ impl App {
             .unwrap_or_default();
         self.head = 0.0;
         self.loop_range = None;
-        self.player.stop();
-        self.player.seek(0);
-        self.player.set_loop(0, 0);
-        self.clip_fresh = false;
+        self.engine.stop();
+        self.engine.set_loop(0, 0);
         self.rebuild();
+        self.push_to_engine();
         // 開いた直後は曲ぜんぶが見えるほうが迷わない
         if let Some(song) = &self.song {
             self.zoom = edit::zoom_for_whole(song, self.ed.view_w);
@@ -275,8 +278,9 @@ impl App {
         }
     }
 
-    fn sample_of(&self, step: f32) -> usize {
-        (self.step_to_sec(step) * self.player.sample_rate as f64) as usize
+    /// 目盛りをサンプル位置へ。鳴らす側は 48kHz で数える。
+    fn sample_of(&self, step: f32) -> u64 {
+        (self.step_to_sec(step) * tonescript_dsp::osc::SR as f64) as u64
     }
 
     /// 新しい曲を作って、そのまま開く。
@@ -439,43 +443,42 @@ impl App {
         }
     }
 
-    /// 鳴らす音を作り直す。編集したあとに一度だけ走る。
-    fn refresh_clip(&mut self) {
+    /// 今の譜面と設定を鳴らす側へ渡す。
+    ///
+    /// 前は「曲まるごとを作り直して帯を差し替える」だった所。今は譜面を
+    /// 渡すだけで、音は鳴らしながら作られる。**鳴っている最中でもいい。**
+    fn push_to_engine(&mut self) {
         let (Some(song), Some(score)) = (self.song.clone(), self.score.clone()) else { return };
-        let quiet = |_: &str| {};
-        let mut stems = tonescript_render::render_stems(&song, &score, &quiet);
-        let vocals = if song.audio_tracks.is_empty() {
-            Vec::new()
-        } else {
-            let (v, _missing) = tonescript_render::load_audio_tracks(&song, &out_dir(), &quiet);
-            v
-        };
-        let mut out =
-            tonescript_render::mix_down_with(&song, &mut stems, &score, &vocals, &quiet);
-        tonescript_render::master(&mut out, song.master_lufs, &quiet);
-        self.player.set_clip(out.l, out.r);
-        self.clip_fresh = true;
+        self.engine.set_score(Arc::new(song), Arc::new(score));
+        self.engine.set_mutes(&self.project.muted, &self.project.soloed);
+        self.engine.seek(self.sample_of(self.head));
+        if let Some((a, b)) = self.loop_range {
+            self.engine.set_loop(self.sample_of(a), self.sample_of(b));
+        }
     }
 
     /// 鳴らす。止まっていれば今の位置から、鳴っていれば止める。
     fn toggle_play(&mut self) {
-        if self.player.error.is_some() {
+        if self.out.error.is_some() {
             self.status = "音の出口が開けません（書き出しはできます）".into();
             return;
         }
-        if self.player.is_playing() {
+        if self.engine.is_playing() {
             // 止めたら、止めた所を覚える
-            self.head = self.sec_to_step(
-                self.player.position() as f64 / self.player.sample_rate as f64,
-            );
-            self.player.stop();
+            self.head = self.sec_to_step(self.engine.seconds());
+            self.engine.stop();
             return;
         }
-        if !self.clip_fresh {
-            self.refresh_clip();
+        self.engine.seek(self.sample_of(self.head));
+        self.engine.play();
+    }
+
+    /// 触った音をその場で返す。**DAW なら当たり前のこと。**
+    fn audition(&mut self, part: &str, pitch: i32, vel: u8, len: u32) {
+        if self.out.error.is_some() || self.engine.is_playing() {
+            return;
         }
-        self.player.seek(self.sample_of(self.head));
-        self.player.play();
+        self.engine.note_on_steps(part, pitch, vel, len.clamp(1, 16));
     }
 
     /// 譜面を組み直す。曲ファイル + 手で触ったぶん。
@@ -533,8 +536,8 @@ impl App {
     fn touched(&mut self) {
         self.saver.touched();
         self.rebuild();
-        // 音符が変わったので、鳴らす音も作り直しが要る
-        self.clip_fresh = false;
+        // 音符が変わった。鳴らしたままでも渡せる
+        self.push_to_engine();
     }
 
     fn tick_autosave(&mut self) {
@@ -660,11 +663,12 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _f: &mut eframe::Frame) {
         self.pump();
         self.tick_autosave();
-        if self.player.is_playing() {
-            self.head = self.sec_to_step(
-                self.player.position() as f64 / self.player.sample_rate as f64,
-            );
+        if self.engine.is_playing() {
+            self.head = self.sec_to_step(self.engine.seconds());
             ctx.request_repaint();
+        }
+        if self.engine.took_end() {
+            self.status = "終わりまで鳴らしました".into();
         }
         if self.busy {
             ctx.request_repaint();
@@ -730,7 +734,7 @@ impl eframe::App for App {
             };
             let tr = Transport {
                 head: self.head,
-                playing: self.player.is_playing(),
+                playing: self.engine.is_playing(),
                 loop_range: self.loop_range,
             };
             let t = edit::piano_roll(
@@ -747,20 +751,23 @@ impl eframe::App for App {
             if t.changed {
                 self.touched();
             }
+            if let Some((part, pitch, vel, len)) = t.hit {
+                self.audition(&part, pitch, vel, len);
+            }
             if let Some(at) = t.seek_to {
                 self.head = at;
-                self.player.seek(self.sample_of(at));
+                self.engine.seek(self.sample_of(at));
             }
             if let Some((a, b)) = t.loop_set {
                 self.loop_range = Some((a, b));
-                self.player.set_loop(self.sample_of(a), self.sample_of(b));
+                self.engine.set_loop(self.sample_of(a), self.sample_of(b));
             }
             if t.loop_clear {
                 self.loop_range = None;
-                self.player.set_loop(0, 0);
+                self.engine.set_loop(0, 0);
             }
             // 鳴っているあいだ、ヘッドが画面から出たら追う
-            if self.follow && self.player.is_playing() {
+            if self.follow && self.engine.is_playing() {
                 let x = self.head * self.zoom - self.scroll;
                 let w = ui.available_width().max(1.0);
                 if x < w * 0.1 || x > w * 0.9 {
@@ -1051,7 +1058,7 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                 app.open();
                 app.project = keep;
                 app.rebuild();
-                app.clip_fresh = false;
+                app.push_to_engine();
                 app.refresh_list();
                 app.status = format!("{} へ書きました", path.display());
             }
@@ -1316,10 +1323,10 @@ impl App {
                         }
                     }
                     ui.separator();
-                    let playing = self.player.is_playing();
+                    let playing = self.engine.is_playing();
                     if ui
                         .add_enabled(
-                            self.song.is_some() && self.player.error.is_none(),
+                            self.song.is_some() && self.out.error.is_none(),
                             egui::Button::new(if playing { "■ 止める" } else { "▶ 鳴らす" }),
                         )
                         .on_hover_text("Space")
@@ -1329,7 +1336,7 @@ impl App {
                     }
                     if ui.button("頭へ").on_hover_text("再生ヘッドを先頭へ").clicked() {
                         self.head = 0.0;
-                        self.player.seek(0);
+                        self.engine.seek(0);
                         self.scroll = 0.0;
                     }
                     ui.checkbox(&mut self.follow, "追う");
@@ -1351,10 +1358,10 @@ impl App {
                     if let Some((a, b)) = self.loop_range {
                         if ui.button("繰り返しを解く").clicked() {
                             self.loop_range = None;
-                            self.player.set_loop(0, 0);
+                            self.engine.set_loop(0, 0);
                         }
                         // 出口が本当にその範囲を持っているかも出す
-                        let on = self.player.loop_range().is_some();
+                        let on = self.engine.loop_range().is_some();
                         let bars = self
                             .song
                             .as_ref()
@@ -1544,8 +1551,18 @@ impl App {
                 ui.label(theme::head("記録"));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(theme::dim(&self.status));
-                    if let Some(e) = &self.player.error {
+                    if let Some(e) = &self.out.error {
                         ui.colored_label(theme::ORANGE, format!("音: {e}"));
+                    } else if let Some(n) = &self.out.note {
+                        // 周波数が合っていない。黙ってずれるより言う
+                        ui.colored_label(theme::ORANGE, format!("音: {}Hz", self.out.sample_rate))
+                            .on_hover_text(n);
+                    } else {
+                        // 今いくつ鳴っているか。鳴らしながら作っている証拠
+                        let v = self.engine.voices();
+                        if v > 0 {
+                            ui.label(theme::dim(&format!("{v} 音")));
+                        }
                     }
                     if let Some(n) = &self.font_note {
                         if n.starts_with("[!]") {
