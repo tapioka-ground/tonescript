@@ -1,0 +1,12 @@
+[package]
+name = "tonescript-render"
+description = "曲を音にする。編曲・合成・ミックス・マスタリング。"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+tonescript-dsp = { path = "../dsp" }
+tonescript-song = { path = "../song" }
+rayon = { workspace = true }

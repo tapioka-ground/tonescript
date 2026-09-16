@@ -1,0 +1,10 @@
+[package]
+name = "tonescript-project"
+description = "編集の状態。自動保存と、落ちたときの復帰。"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+tonescript-song = { path = "../song" }

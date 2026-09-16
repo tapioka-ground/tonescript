@@ -1,0 +1,12 @@
+[package]
+name = "tonescript-dsp"
+description = "Tonescript の音を作る所。発振器・エンベロープ・フィルタ・音色。"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+rayon = { workspace = true }
+
+[dev-dependencies]

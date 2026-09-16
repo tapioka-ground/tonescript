@@ -1,0 +1,15 @@
+[package]
+name = "tonescript-song"
+description = "曲の読み込み。Rhai で書かれた曲ファイルを譜面の素へ変換する。"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+rhai = { version = "1.19", features = ["sync", "no_closure"] }
+tonescript-dsp = { path = "../dsp" }
+
+[dev-dependencies]
+tonescript-render = { path = "../render" }
+tonescript-dsp = { path = "../dsp" }

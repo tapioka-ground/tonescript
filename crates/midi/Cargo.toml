@@ -1,0 +1,10 @@
+[package]
+name = "tonescript-midi"
+description = "MIDI ファイルの読み書き。外と音符をやり取りするための形式。"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+tonescript-song = { path = "../song" }

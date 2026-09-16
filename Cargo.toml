@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = ["crates/dsp", "crates/song", "crates/render", "crates/project", "crates/midi", "crates/cli", "crates/app"]
+
+[workspace.dependencies]
+rayon = "1.10"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT"
+repository = "https://github.com/tapioka-ground/tonescript"
+
+# 音を作る所は必ず最適化して走らせる。デバッグビルドでも例外にしない。
+# 素朴なサンプルループにするのが移植の要点なので、最適化が切れていると
+# Python より遅いという誤った測定結果が出る。
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

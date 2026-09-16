@@ -1,0 +1,228 @@
+# Tonescript
+
+Write music as text. 46 instruments, zero samples.
+
+Every sound is computed — filters, reverb, mastering, all from scratch.
+No DAW, no plugins, no sample libraries. A 34-second track renders in 0.24s.
+
+Songs are plain text, so you can write them by hand — or hand
+[SONGFILE.md](SONGFILE.md) to an AI and have it write them for you.
+
+日本語は下にあります。
+
+---
+
+## Quick start
+
+```
+cargo build --release
+```
+
+Then double-click a `.bat`, or use the command:
+
+| | |
+|---|---|
+| `tone-app.bat` | Opens the window. Pick a song, edit notes, press Space to play |
+| `tone.bat` | Command line |
+
+```
+tone list               list songs
+tone check    <song>    check it loads, see note counts
+tone render   <song>    render to WAV
+tone project  <song>    saved edits, backups, autosave
+tone midi-out <song>    export MIDI
+tone patches            list the 46 instruments
+```
+
+| Environment variable | Points at | Default |
+|---|---|---|
+| `TONESCRIPT_SONGS` | where songs live | `songs` |
+| `TONESCRIPT_ROOT` | where output goes | `out` |
+
+## What's inside
+
+```
+crates/dsp/      oscillators, envelopes, filters, 46 instruments, 11 drums, reverb
+crates/song/     song files (Rhai), time signatures, automation
+crates/render/   arrangement, synthesis, mixing, mastering, WAV
+crates/project/  edit state, autosave, undo
+crates/midi/     MIDI read/write
+crates/cli/      the `tone` command
+crates/app/      the window (egui), playback (cpal)
+```
+
+Dependencies: Rhai, rayon, egui, cpal. That's all.
+
+## Writing songs
+
+**[SONGFILE.md](SONGFILE.md) is the full spec** — every value, its shape,
+its range, its default, and what it sounds like.
+
+The smallest song that makes a sound:
+
+```rhai
+let BPM = 120;
+let SECTIONS = [["A", 2, "p", "k", "m", 1.0]];
+let VOICES = #{ lead: #{ ch: 0, patch: "piano" } };
+let MELODY = #{ "1": bar([[4,"C4"], [4,"E4"], [8,"G4"]]), "2": bar([[16,"C5"]]) };
+let ARRANGE = #{ "1": ["lead"], "2": ["lead"] };
+```
+
+To have an AI write one: *"Follow SONGFILE.md and write songs/x.rhai. Make it …"*
+Then run `tone check x`. The loader verifies bar sums, value ranges and note
+names, so if it passes, the song is structurally sound.
+
+## Notes from the port
+
+This started as Python (numpy + Numba + Tkinter). One rule guided the port:
+**drop the tricks that only existed to work around Python's speed.**
+
+Nearest-neighbour wavetable lookup, a one-pole filter faked with FFT
+convolution, a dependency on Numba. All correct decisions in Python.
+In Rust the plain loop is both faster and more accurate.
+
+Correctness was checked with numbers, not ears. The RNG is numpy-compatible
+(PCG64 + SeedSequence), so the same seed gives the same waveform as Python
+and every instrument can be compared sample by sample.
+
+| | Python | Rust | |
+|---|---|---|---|
+| saw @440Hz (error) | 0.00453 | 0.00028 | Rust 16× more accurate |
+| saw @80Hz (error) | 0.00467 | 0.00012 | Rust 38× more accurate |
+| `osc_saw`, 1s ×100 | 79.4 ms | 18.3 ms | 4.3× |
+| `highpass`, 1s ×100 | 203.5 ms | 9.6 ms | **21×** |
+| 920 notes | 2139 ms | 183 ms | 11.7× |
+| render `example` | 4.30 s | 0.24 s | 18× |
+
+All 11 drums match Python exactly. Of 46 instruments, 20 are sample-exact
+and 26 correlate above 0.999 — that difference is the wavetable
+interpolation above, which is the improvement.
+
+The 21× on `highpass` is where Python's cleverness disappeared: an FFT
+convolution became a three-line loop.
+
+275 tests.
+
+## Not ported
+
+Hand-drawn instrument icons (46 of them), the built-in singing voice
+(PSOLA + UTAU), speech-to-pitch tracing, and music video generation.
+Vocals come in through `AUDIO_TRACKS` as WAV instead.
+
+## License
+
+MIT ([LICENSE](LICENSE)). That covers the source code, not the songs you
+make with it, nor any samples or voice banks you supply.
+
+---
+
+# Tonescript（日本語）
+
+曲をテキストで書く。楽器46種、音源ゼロ。
+
+音は全部計算で作っている。フィルタも残響もマスタリングも自前で、
+DAW もプラグインも音源ライブラリも使わない。34秒の曲が 0.24 秒でできる。
+
+曲はただのテキストなので、手で書いてもいいし、
+[SONGFILE.md](SONGFILE.md) を AI に渡して書かせてもいい。
+
+## すぐ試す
+
+```
+cargo build --release
+```
+
+あとはフォルダの中の `.bat` をダブルクリックするだけ。
+
+| | |
+|---|---|
+| `tone-app.bat` | 画面を開く。曲を選び、音符を触り、Space で鳴らす |
+| `tone.bat` | コマンド |
+
+```
+tone list               曲の一覧
+tone check    <曲>      読めるか、各パート何ノートか
+tone render   <曲>      音にして WAV へ
+tone project  <曲>      保存の状態（世代・自動保存）
+tone midi-out <曲>      MIDI へ持ち出す
+tone patches            46音色の一覧
+```
+
+| 環境変数 | 何を指すか | 既定 |
+|---|---|---|
+| `TONESCRIPT_SONGS` | 曲の置き場 | `songs` |
+| `TONESCRIPT_ROOT` | 書き出し先 | `out` |
+
+## 何が入っているか
+
+```
+crates/dsp/      発振器・エンベロープ・フィルタ・46音色・11ドラム・残響
+crates/song/     曲ファイル（Rhai）、拍子、オートメーション
+crates/render/   編曲・合成・ミックス・マスタリング・WAV
+crates/project/  編集の状態、自動保存、取り消し
+crates/midi/     MIDI の読み書き
+crates/cli/      tone コマンド
+crates/app/      画面（egui）、再生（cpal）
+```
+
+依存は Rhai、rayon、egui、cpal だけ。
+
+## 曲の書き方
+
+**全仕様は [SONGFILE.md](SONGFILE.md) にある。** 値ひとつずつ、形と範囲と
+既定値、そして「こう書けばこう鳴る」が書いてある。
+
+音が出る最小の曲：
+
+```rhai
+let BPM = 120;
+let SECTIONS = [["A", 2, "p", "k", "m", 1.0]];
+let VOICES = #{ lead: #{ ch: 0, patch: "piano" } };
+let MELODY = #{ "1": bar([[4,"C4"], [4,"E4"], [8,"G4"]]), "2": bar([[16,"C5"]]) };
+let ARRANGE = #{ "1": ["lead"], "2": ["lead"] };
+```
+
+AI に書かせるなら「SONGFILE.md に従って songs/x.rhai を書いて。〜な曲で」。
+そのあと `tone check x`。小節の合計・値の範囲・音名は読み込み時に全部
+検算されるので、通れば曲として破綻していない。
+
+## 移植について
+
+もとは Python（numpy + Numba + Tkinter）。方針は1つだけ。
+**Python の速度を回避するための細工は、移し替えずに捨てる。**
+
+波形テーブルの最近傍引き、1極フィルタの FFT 畳み込み、Numba への依存。
+どれも Python では正しい判断だが、Rust では素直なループのほうが速く、
+しかも正確になる。
+
+合っているかは耳ではなく数字で確かめた。乱数を numpy 互換
+（PCG64 + SeedSequence）にしてあるので、同じ種なら Python と同じ波形が
+出て、音色を1本ずつサンプル単位で突き合わせられる。
+
+| | Python | Rust | |
+|---|---|---|---|
+| ノコギリ波 440Hz（誤差） | 0.00453 | 0.00028 | Rust が 16倍 正確 |
+| ノコギリ波 80Hz（誤差） | 0.00467 | 0.00012 | Rust が 38倍 正確 |
+| `osc_saw` 1秒 ×100 | 79.4 ms | 18.3 ms | 4.3倍 |
+| `highpass` 1秒 ×100 | 203.5 ms | 9.6 ms | **21倍** |
+| 920 ノート | 2139 ms | 183 ms | 11.7倍 |
+| `example` の書き出し | 4.30 s | 0.24 s | 18倍 |
+
+ドラム11種は全部一致。音色46種のうち20本がサンプル完全一致、26本が
+相関 0.999 以上。差が出たぶんは上の補間の改善そのもの。
+
+`highpass` の21倍が「Python の賢さが消えた」ところ。FFT 畳み込みが
+3行のループになった。
+
+テスト 275 件。
+
+## 移植しなかったもの
+
+手描きの楽器アイコン46個、内蔵の歌声合成（PSOLA + UTAU 音源）、
+喋りから抑揚を写すもの、ミュージックビデオの生成。
+歌は `AUDIO_TRACKS` に WAV を置く形に一本化した。
+
+## ライセンス
+
+MIT（[LICENSE](LICENSE)）。ソースコードのライセンスであって、
+このソフトで作った曲や、別途用意する音源・素材には及ばない。

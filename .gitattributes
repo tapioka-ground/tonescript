@@ -1,0 +1,10 @@
+# 改行は LF に揃える。Windows で書いても、他の環境で読んでも同じになる。
+* text=auto eol=lf
+
+# .bat は Windows でしか動かない。CRLF のままにする
+*.bat text eol=crlf
+
+# 中身が文字でないもの
+*.wav binary
+*.mid binary
+*.png binary
