@@ -56,7 +56,7 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let code = match args.first().map(|s| s.as_str()) {
         Some("list") => cmd_list(),
-        Some("patches") => cmd_patches(),
+        Some("patches") => cmd_patches(args.get(1)),
         Some("check") => cmd_check(args.get(1)),
         Some("render") => cmd_render(args.get(1), &args[1..]),
         Some("project") => cmd_project(args.get(1)),
@@ -84,7 +84,7 @@ fn usage() {
     println!("      --rate 44100|48000|96000   周波数（既定 48000）");
     println!("      --depth 16|24|32           深さ（既定 16。32 は小数）");
     println!("      --no-dither                16bit の丸めの粉を足さない");
-    println!("  tonescript patches        使える音色の一覧");
+    println!("  tonescript patches [曲]   音色の一覧（曲を渡すとその曲が作った音色も）");
     println!("  tonescript project <曲>   保存の状態（世代・自動保存）を見る");
     println!("  tonescript midi-out <曲> [書き出し先]   MIDI へ持ち出す");
     println!("  tonescript midi-in  <曲> <MIDI>         MIDI から持ち込む（中身を見るだけ）");
@@ -108,11 +108,60 @@ fn cmd_list() -> i32 {
     0
 }
 
-fn cmd_patches() -> i32 {
+/// 音色の一覧。曲を渡せば、その曲が作った音色も出す。
+fn cmd_patches(name: Option<&String>) -> i32 {
     let names = tonescript_dsp::patch::NAMES;
-    println!("音色 {} 種:", names.len());
+    println!("内蔵 {} 種:", names.len());
     for row in names.chunks(6) {
         println!("  {}", row.join("  "));
+    }
+    let Some(name) = name else {
+        println!();
+        println!("曲の名前を渡すと、その曲が作った音色も出します");
+        println!("  tonescript patches <曲>");
+        return 0;
+    };
+    let song = match load(name) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[!] {e}");
+            return 1;
+        }
+    };
+    if song.patches.is_empty() {
+        println!();
+        println!("{name} には PATCHES がありません（SONGFILE.md の §10）");
+        return 0;
+    }
+    let mut own: Vec<&String> = song.patches.keys().collect();
+    own.sort();
+    println!();
+    println!("{name} が作った音色 {} 種:", own.len());
+    for k in own {
+        let r = &song.patches[k];
+        // 中身を一行で言う。どういう作りか思い出せるように
+        let mut how = Vec::new();
+        if !r.osc.is_empty() {
+            how.push(format!("発振器 {}本", r.osc.len()));
+        }
+        if !r.partials.is_empty() {
+            how.push(format!("倍音 {}個", r.partials.len()));
+        }
+        if r.filter.kind != tonescript_dsp::recipe::FilterKind::None {
+            how.push(format!("{:?} {:.0}Hz", r.filter.kind, r.filter.base));
+        }
+        if r.fm.index > 0.0 {
+            how.push(format!("FM x{:.1}", r.fm.ratio));
+        }
+        if r.attack.amount > 0.0 {
+            how.push("頭に雑音".into());
+        }
+        if r.ring > 0.0 {
+            how.push(format!("余韻 {:.2}秒", r.ring));
+        }
+        // 内蔵と同じ名前なら、上書きしていることを言う
+        let over = if names.contains(&k.as_str()) { "（内蔵を上書き）" } else { "" };
+        println!("  {:<14}{}  {}", k, over, how.join(" / "));
     }
     0
 }

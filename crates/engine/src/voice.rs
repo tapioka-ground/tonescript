@@ -134,13 +134,10 @@ pub fn render(song: &Song, part: &str, note: &Note, times: &[f64]) -> Option<Vec
     };
     let s = at(note.pos);
     let e = at(note.pos + note.len.max(1)).max(s + 1);
-    let ring = if part == "drums" || part == "perc" {
-        0.0
-    } else {
-        tonescript_render::arrange::patch_for(song, part, 1)
-            .map(|p| tonescript_dsp::patch::ring(&p))
-            .unwrap_or(0.0)
-    };
+    let ring = tonescript_render::arrange::patch_for(song, part, 1)
+        .map(|p| tonescript_render::ring_of(song, &p))
+        .unwrap_or(0.0);
+    let ring = if part == "drums" || part == "perc" { 0.0 } else { ring };
     tonescript_render::render_note(song, &Cfg::default(), part, note, s, e, ring).map(|(_, w)| w)
 }
 
@@ -151,13 +148,10 @@ pub fn render(song: &Song, part: &str, note: &Note, times: &[f64]) -> Option<Vec
 pub fn render_live(song: &Song, part: &str, pitch: i32, vel: u8, secs: f32) -> Option<Vec<f32>> {
     let n = ((secs.max(0.01) * SR) as usize).max(1);
     let note = Note { pos: 0, len: 1, pitch, vel, mora: String::new() };
-    let ring = if part == "drums" || part == "perc" {
-        0.0
-    } else {
-        tonescript_render::arrange::patch_for(song, part, 1)
-            .map(|p| tonescript_dsp::patch::ring(&p))
-            .unwrap_or(0.0)
-    };
+    let ring = tonescript_render::arrange::patch_for(song, part, 1)
+        .map(|p| tonescript_render::ring_of(song, &p))
+        .unwrap_or(0.0);
+    let ring = if part == "drums" || part == "perc" { 0.0 } else { ring };
     tonescript_render::render_note(song, &Cfg::default(), part, &note, 0, n, ring).map(|(_, w)| w)
 }
 

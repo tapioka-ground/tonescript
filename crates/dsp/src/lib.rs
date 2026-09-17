@@ -18,6 +18,7 @@ pub mod env;
 pub mod filter;
 pub mod osc;
 pub mod patch;
+pub mod recipe;
 pub mod reverb;
 pub mod rng;
 pub mod shape;

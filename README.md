@@ -12,6 +12,8 @@ No plugins, no sample libraries. A 34-second track renders in 0.24s.
 
 The song is plain text, so you can write it by hand — or hand
 [SONGFILE.md](SONGFILE.md) to an AI and have it write it for you.
+**The instruments are text too**, so an AI can design the sounds, not just
+the notes.
 
 日本語は下にあります。
 
@@ -36,7 +38,7 @@ tone check    <song>    check it loads, see note counts
 tone render   <song>    render to WAV
 tone project  <song>    saved edits, backups, autosave
 tone midi-out <song>    export MIDI
-tone patches            list the 46 instruments
+tone patches  [song]    list instruments (plus the song's own)
 ```
 
 | Environment variable | Points at | Default |
@@ -48,6 +50,7 @@ tone patches            list the 46 instruments
 
 ```
 crates/dsp/      oscillators, envelopes, filters, 46 instruments, 11 drums, reverb
+                 and the recipe format for instruments you write yourself
 crates/song/     song files (Rhai), time signatures, automation
 crates/render/   arrangement, synthesis, mixing, mastering, WAV
 crates/engine/   real-time playback: scheduler, lock-free queue, mixer
@@ -107,7 +110,7 @@ interpolation above, which is the improvement.
 The 21× on `highpass` is where Python's cleverness disappeared: an FFT
 convolution became a three-line loop.
 
-402 tests.
+419 tests.
 
 ## Not ported
 
@@ -136,6 +139,7 @@ MIDI 鍵盤を挿せば弾ける。マイクから歌も録れる（メトロノ
 
 曲はただのテキストなので、手で書いてもいいし、
 [SONGFILE.ja.md](SONGFILE.ja.md) を AI に渡して書かせてもいい。
+**音色もテキスト**なので、曲だけでなく音そのものを作らせられる。
 
 ## すぐ試す
 
@@ -156,7 +160,7 @@ tone check    <曲>      読めるか、各パート何ノートか
 tone render   <曲>      音にして WAV へ
 tone project  <曲>      保存の状態（世代・自動保存）
 tone midi-out <曲>      MIDI へ持ち出す
-tone patches            46音色の一覧
+tone patches  [曲]      音色の一覧（曲が作った音色も）
 ```
 
 | 環境変数 | 何を指すか | 既定 |
@@ -168,6 +172,7 @@ tone patches            46音色の一覧
 
 ```
 crates/dsp/      発振器・エンベロープ・フィルタ・46音色・11ドラム・残響
+                 自分で音色を作るための書式
 crates/song/     曲ファイル（Rhai）、拍子、オートメーション
 crates/render/   編曲・合成・ミックス・マスタリング・WAV
 crates/engine/   鳴らしながら計算する側。先回り係・待たない受け渡し・ミキサー
@@ -227,7 +232,7 @@ AI に書かせるなら「SONGFILE.ja.md に従って songs/x.rhai を書いて
 `highpass` の21倍が「Python の賢さが消えた」ところ。FFT 畳み込みが
 3行のループになった。
 
-テスト 402 件。
+テスト 419 件。
 
 ## 移植しなかったもの
 

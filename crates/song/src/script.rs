@@ -10,6 +10,7 @@
 //!     固まらないようにしてある
 
 use crate::model::*;
+use tonescript_dsp::recipe;
 use rhai::{Array, Dynamic, Engine, Map, Scope};
 use std::collections::HashMap;
 use std::fmt;
@@ -491,6 +492,16 @@ fn build(scope: &Scope) -> R<Song> {
         s.edit_parts.sort();
     }
 
+    // --- 自分で作る音色
+    if let Some(v) = get(scope, "PATCHES") {
+        for (name, pv) in map(&v, "PATCHES")?.iter() {
+            let r = read_recipe(pv, name)?;
+            // 鳴らす前に数を見る。無音や発振はここで止める
+            recipe::check(&r).map_err(|e| LoadError::Shape(format!("PATCHES.{name}: {e}")))?;
+            s.patches.insert(name.to_string(), r);
+        }
+    }
+
     // --- 音声トラック
     if let Some(v) = get(scope, "AUDIO_TRACKS") {
         for (name, tv) in map(&v, "AUDIO_TRACKS")?.iter() {
@@ -662,6 +673,167 @@ fn tuple4(scope: &Scope, name: &str, dflt: (f32, f32, f32, f32)) -> R<(f32, f32,
         }
     };
     Ok((g(0, dflt.0)?, g(1, dflt.1)?, g(2, dflt.2)?, g(3, dflt.3)?))
+}
+
+
+// ---------------------------------------------------------------- 自分で作る音色
+
+/// `PATCHES` の1つを読む。書いていない所は既定値のまま。
+///
+/// **書き忘れで止めない。** 音色は「まず鳴らして、直す」で作るものなので、
+/// 最小限（`osc` だけ、あるいは何も書かない）でも音が出るようにしてある。
+/// おかしいのは値そのものだけで、それは [`recipe::check`] が言う。
+fn read_recipe(v: &Dynamic, name: &str) -> R<recipe::Recipe> {
+    let m = map(v, &format!("PATCHES.{name}"))?;
+    let mut r = recipe::Recipe::default();
+    let at = |k: &str| format!("PATCHES.{name}.{k}");
+
+    // 発振器
+    if let Some(list) = field(&m, "osc") {
+        let items = arr(list, &at("osc"))?;
+        r.osc = Vec::with_capacity(items.len());
+        for (i, it) in items.iter().enumerate() {
+            let om = map(it, &format!("{}[{i}]", at("osc")))?;
+            let wave = match field(&om, "wave").and_then(|w| w.clone().into_string().ok()) {
+                Some(w) => match recipe::Wave::from_name(&w) {
+                    Some(x) => x,
+                    None => {
+                        return shape(format!(
+                            "{}[{i}] の wave が {w} です。{} のどれかに",
+                            at("osc"),
+                            recipe::Wave::NAMES.join(" / ")
+                        ))
+                    }
+                },
+                None => recipe::Wave::Saw,
+            };
+            r.osc.push(recipe::Osc {
+                wave,
+                mix: mnum(&om, "mix", 1.0)?,
+                detune: mnum(&om, "detune", 0.0)?,
+                octave: mnum(&om, "octave", 0.0)? as i32,
+            });
+        }
+    }
+
+    // 倍音。整数倍でない倍音を足すと、鐘やガムランになる
+    if let Some(list) = field(&m, "partials") {
+        for (i, it) in arr(list, &at("partials"))?.iter().enumerate() {
+            let t = arr(it, &format!("{}[{i}]", at("partials")))?;
+            if t.len() < 3 {
+                return shape(format!(
+                    "{}[{i}] は [音程の倍率, 大きさ, 落ちる秒数] の3つで書いてください",
+                    at("partials")
+                ));
+            }
+            r.partials
+                .push((num(&t[0], "倍率")?, num(&t[1], "大きさ")?, num(&t[2], "落ちる秒数")?));
+        }
+    }
+
+    // 音量のかたち
+    if let Some(e) = field(&m, "env") {
+        let em = map(e, &at("env"))?;
+        r.env = recipe::Env {
+            a: mnum(&em, "a", r.env.a)?,
+            d: mnum(&em, "d", r.env.d)?,
+            s: mnum(&em, "s", r.env.s)?,
+            r: mnum(&em, "r", r.env.r)?,
+        };
+    }
+
+    // フィルタ
+    if let Some(f) = field(&m, "filter") {
+        let fm = map(f, &at("filter"))?;
+        let kind = match field(&fm, "kind").and_then(|k| k.clone().into_string().ok()) {
+            Some(k) => match recipe::FilterKind::from_name(&k) {
+                Some(x) => x,
+                None => {
+                    return shape(format!(
+                        "{} の kind が {k} です。{} のどれかに",
+                        at("filter"),
+                        recipe::FilterKind::NAMES.join(" / ")
+                    ))
+                }
+            },
+            // kind を書かずに他を書いたなら、掛けたいのだと解する
+            None => recipe::FilterKind::Ladder,
+        };
+        let d = recipe::Filter::default();
+        r.filter = recipe::Filter {
+            kind,
+            base: mnum(&fm, "base", d.base)?,
+            sweep: mnum(&fm, "sweep", d.sweep)?,
+            res: mnum(&fm, "res", d.res)?,
+            track: mnum(&fm, "track", d.track)?,
+            vel: mnum(&fm, "vel", d.vel)?,
+            env: match field(&fm, "env") {
+                Some(e) => {
+                    let em = map(e, &at("filter.env"))?;
+                    (
+                        mnum(&em, "a", d.env.0)?,
+                        mnum(&em, "d", d.env.1)?,
+                        mnum(&em, "curve", d.env.2)?,
+                    )
+                }
+                None => d.env,
+            },
+        };
+    }
+
+    // 頭の雑音。撥弦の爪や息の立ち上がり
+    if let Some(a) = field(&m, "attack") {
+        let am = map(a, &at("attack"))?;
+        r.attack = recipe::Attack {
+            amount: mnum(&am, "amount", 0.0)?,
+            hp: mnum(&am, "hp", 2000.0)?,
+            a: mnum(&am, "a", 0.0003)?,
+            d: mnum(&am, "d", 0.01)?,
+        };
+    }
+
+    // 揺れ
+    if let Some(v) = field(&m, "vibrato") {
+        let vm = map(v, &at("vibrato"))?;
+        r.vibrato = recipe::Vibrato {
+            rate: mnum(&vm, "rate", 5.0)?,
+            depth: mnum(&vm, "depth", 0.0)?,
+            delay: mnum(&vm, "delay", 0.0)?,
+        };
+    }
+
+    // FM
+    if let Some(v) = field(&m, "fm") {
+        let f2 = map(v, &at("fm"))?;
+        r.fm = recipe::Fm {
+            ratio: mnum(&f2, "ratio", 2.0)?,
+            index: mnum(&f2, "index", 0.0)?,
+            decay: mnum(&f2, "decay", 0.3)?,
+        };
+    }
+
+    // やまびこ
+    if let Some(v) = field(&m, "delay") {
+        let dm = map(v, &at("delay"))?;
+        r.delay = recipe::Delay {
+            time: mnum(&dm, "time", 0.15)?,
+            feedback: mnum(&dm, "feedback", 0.3)?,
+            mix: mnum(&dm, "mix", 0.0)?,
+        };
+    }
+
+    r.drive = mnum(&m, "drive", r.drive)?;
+    r.gain = mnum(&m, "gain", r.gain)?;
+    r.ring = mnum(&m, "ring", r.ring)?;
+    Ok(r)
+}
+
+/// 表から数を1つ。書いていなければ既定値。
+fn mnum(m: &Map, key: &str, dflt: f32) -> R<f32> {
+    match field(m, key) {
+        Some(v) => num(v, key),
+        None => Ok(dflt),
+    }
 }
 
 #[cfg(test)]

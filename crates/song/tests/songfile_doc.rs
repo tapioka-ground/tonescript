@@ -354,3 +354,158 @@ fn the_example_song_follows_its_own_spec() {
     assert!(!score["lead"].is_empty(), "雛形の旋律が鳴らない");
     assert!(!score["drums"].is_empty(), "雛形のドラムが鳴らない");
 }
+
+// ---------------------------------------------------------------- 自分で作る音色
+
+/// §10 に載せた「自分で音色を作る」の例。
+///
+/// 文書に載せた数がそのまま通り、**本当に音が出る**ことまで確かめる。
+/// 読めるだけで無音なら、載せた意味がない。
+const PATCHES_DOC: &str = r#"
+let BPM = 120;
+let SECTIONS = [["A", 1, "p", "k", "m", 1.0]];
+let PATCHES = #{
+    // いちばん短い書き方。これだけで鳴る
+    plain: #{},
+
+    // 分厚いのこぎり。少しずらして重ねる
+    fatsaw: #{
+        osc: [
+            #{ wave: "saw", mix: 1.0, detune: -14 },
+            #{ wave: "saw", mix: 1.0, detune: 0 },
+            #{ wave: "saw", mix: 1.0, detune: 14 },
+            #{ wave: "saw", mix: 0.6, octave: -1 },
+        ],
+        env: #{ a: 0.008, d: 0.20, s: 0.75, r: 0.12 },
+        filter: #{ kind: "ladder", base: 700, sweep: 7000, res: 0.35, vel: 1500,
+                   env: #{ a: 0.004, d: 0.25, curve: 2.2 } },
+        drive: 1.6,
+        gain: 0.55,
+    },
+
+    // ガラスの鈴。整数倍でない倍音を足す
+    glassbell: #{
+        osc: [],
+        partials: [[1.0, 0.5, 2.4], [2.76, 0.28, 1.6], [5.40, 0.16, 1.0]],
+        env: #{ a: 0.001, d: 2.5, s: 0.0, r: 0.6 },
+        gain: 1.2,
+        ring: 1.8,
+    },
+
+    // 撥いた弦。頭に雑音を混ぜる
+    pickedstring: #{
+        osc: [#{ wave: "saw", mix: 0.6 }, #{ wave: "square", mix: 0.4 }],
+        env: #{ a: 0.001, d: 0.45, s: 0.0, r: 0.10 },
+        filter: #{ base: 1400, sweep: 6000, res: 0.30 },
+        attack: #{ amount: 0.22, hp: 2500, a: 0.0003, d: 0.006 },
+        ring: 0.18,
+    },
+
+    // 金属質な FM
+    fmbell: #{
+        osc: [#{ wave: "sine" }],
+        fm: #{ ratio: 3.5, index: 6.0, decay: 0.4 },
+        env: #{ a: 0.001, d: 1.2, s: 0.0, r: 0.3 },
+        gain: 0.8,
+    },
+
+    // 息もの。雑音を帯で削って笛にする
+    airy: #{
+        osc: [#{ wave: "noise", mix: 1.0 }],
+        filter: #{ kind: "bandpass", base: 1200, res: 0.6 },
+        env: #{ a: 0.08, d: 0.2, s: 0.8, r: 0.15 },
+        vibrato: #{ rate: 5.2, depth: 0.008, delay: 0.3 },
+        gain: 1.5,
+    },
+};
+let VOICES = #{ lead: #{ ch: 0, patch: "fatsaw" } };
+let MELODY = #{ "1": bar([[16, "A4"]]) };
+let ARRANGE = #{ "1": ["lead"] };
+"#;
+
+#[test]
+fn the_patch_examples_all_load() {
+    let s = load(PATCHES_DOC);
+    for name in ["plain", "fatsaw", "glassbell", "pickedstring", "fmbell", "airy"] {
+        assert!(s.patches.contains_key(name), "{name} が読めていない");
+    }
+    // 書いた数がそのまま入っていること
+    let f = &s.patches["fatsaw"];
+    assert_eq!(f.osc.len(), 4);
+    assert_eq!(f.osc[0].detune, -14.0);
+    assert_eq!(f.osc[3].octave, -1);
+    assert!((f.drive - 1.6).abs() < 1e-6);
+    assert_eq!(f.filter.kind, tonescript_dsp::recipe::FilterKind::Ladder);
+    assert!((f.filter.vel - 1500.0).abs() < 1e-6);
+    // kind を書かなくても、他を書けばフィルタは掛かる
+    assert_eq!(
+        s.patches["pickedstring"].filter.kind,
+        tonescript_dsp::recipe::FilterKind::Ladder,
+        "kind 無しでフィルタが掛からない"
+    );
+    // 何も書かない音色も既定値で成立する
+    assert_eq!(s.patches["plain"].osc.len(), 1);
+    assert!((s.patches["glassbell"].ring - 1.8).abs() < 1e-6);
+}
+
+#[test]
+fn every_patch_example_actually_makes_a_sound() {
+    let s = load(PATCHES_DOC);
+    for (name, r) in &s.patches {
+        let w = tonescript_dsp::recipe::render(r, 440.0, 48_000, 1.0, 1);
+        let rms = (w.iter().map(|v| v * v).sum::<f32>() / w.len() as f32).sqrt();
+        assert!(rms > 0.003, "{name} が無音（実効 {rms}）");
+        assert!(w.iter().all(|v| v.is_finite()), "{name} に数でない値が出た");
+        let peak = w.iter().fold(0.0f32, |a, b| a.max(b.abs()));
+        assert!(peak < 8.0, "{name} が大きすぎる（ピーク {peak}）");
+    }
+}
+
+#[test]
+fn a_song_patch_beats_the_built_in_one() {
+    // 同じ名前なら曲ファイル側が勝つ。内蔵の音色を作り替えられる
+    let src = r#"
+        let BPM = 120;
+        let SECTIONS = [["A", 1, "p", "k", "m", 1.0]];
+        let PATCHES = #{ piano: #{ osc: [#{ wave: "square" }], gain: 0.5 } };
+        let VOICES = #{ lead: #{ ch: 0, patch: "piano" } };
+        let MELODY = #{ "1": bar([[16, "A4"]]) };
+        let ARRANGE = #{ "1": ["lead"] };
+    "#;
+    let s = load(src);
+    assert!(s.patches.contains_key("piano"), "内蔵の名前で上書きできない");
+    assert_eq!(s.patches["piano"].osc[0].wave, tonescript_dsp::recipe::Wave::Square);
+}
+
+#[test]
+fn a_broken_patch_is_refused_with_a_reason() {
+    let cases = [
+        // 音の素が無い
+        (r#"let PATCHES = #{ dead: #{ osc: [] } };"#, "素"),
+        // 知らない波の形
+        (r#"let PATCHES = #{ x: #{ osc: [#{ wave: "triangle" }] } };"#, "wave"),
+        // 知らないフィルタ
+        (r#"let PATCHES = #{ x: #{ filter: #{ kind: "notch" } } };"#, "kind"),
+        // 響きが高すぎる（発振する）
+        (r#"let PATCHES = #{ x: #{ filter: #{ kind: "ladder", res: 5.0 } } };"#, "res"),
+        // 倍音の書き方が足りない
+        (r#"let PATCHES = #{ x: #{ partials: [[1.0, 0.5]] } };"#, "partials"),
+    ];
+    let head = r#"
+        let BPM = 120;
+        let SECTIONS = [["A", 1, "p", "k", "m", 1.0]];
+        let VOICES = #{ lead: #{ ch: 0, patch: "x" } };
+    "#;
+    for (bad, want) in cases {
+        let src = format!("{head}\n{bad}");
+        let got = load_str(&src);
+        let e = match got {
+            Ok(_) => panic!("通ってしまった: {bad}"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            e.contains(want) || e.contains("PATCHES"),
+            "理由が分からない: {bad}\n -> {e}"
+        );
+    }
+}

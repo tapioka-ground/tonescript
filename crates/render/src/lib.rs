@@ -80,9 +80,36 @@ pub fn render_note(
     } else {
         let bar = song.bar_of_step(note.pos);
         let name = arrange::patch_for(song, part, bar)?;
-        patch::render(&name, cfg, freq_of(note.pitch), n, vel, seed)?
+        voice_of(song, cfg, &name, freq_of(note.pitch), n, vel, seed)?
     };
     Some((start, wave))
+}
+
+/// 名前から音を作る。**曲ファイルで作った音色を先に見る。**
+///
+/// 同じ名前なら曲ファイル側が勝つ。内蔵の `piano` が好みでなければ、
+/// 曲ファイルに `piano` を書いて作り替えられる。
+pub fn voice_of(
+    song: &Song,
+    cfg: &Cfg,
+    name: &str,
+    freq: f32,
+    n: usize,
+    vel: f32,
+    seed: u64,
+) -> Option<Vec<f32>> {
+    if let Some(r) = song.patches.get(name) {
+        return Some(tonescript_dsp::recipe::render(r, freq, n, vel, seed));
+    }
+    patch::render(name, cfg, freq, n, vel, seed)
+}
+
+/// その音色の余韻（秒）。曲ファイルで作った音色は自分で持っている。
+pub fn ring_of(song: &Song, name: &str) -> f32 {
+    match song.patches.get(name) {
+        Some(r) => r.ring,
+        None => patch::ring(name),
+    }
 }
 
 /// パートごとに音を作る。ノートは並列に回す。
@@ -106,7 +133,7 @@ pub fn render_stems(song: &Song, score: &Score, progress: Progress) -> Stems {
             let ring = if *part == "drums" || *part == "perc" {
                 0.0
             } else {
-                arrange::patch_for(song, part, 1).map(|p| patch::ring(&p)).unwrap_or(0.0)
+                arrange::patch_for(song, part, 1).map(|p| ring_of(song, &p)).unwrap_or(0.0)
             };
             // ノートを並列に作ってから、1本の帯へ足し込む
             let rendered: Vec<(usize, Vec<f32>)> = notes

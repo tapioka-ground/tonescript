@@ -335,6 +335,9 @@ pub struct Song {
     pub extra_hits: HashMap<String, (u8, Vec<Hit>)>,
 
     pub voices: HashMap<String, Voice>,
+    /// 曲ファイルで作った音色。内蔵の46種と同じように使える。
+    /// 同じ名前なら**こちらが勝つ**（内蔵を上書きして作り替えられる）
+    pub patches: HashMap<String, tonescript_dsp::recipe::Recipe>,
     pub edit_parts: Vec<String>,
     pub audio_tracks: HashMap<String, AudioTrack>,
 

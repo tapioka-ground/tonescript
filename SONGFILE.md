@@ -580,7 +580,203 @@ Some instruments **ring past the note length**: `gamelan` 1.6s, `piano`
 
 ---
 
-## 10. Common traps
+---
+
+## 10. Making your own instruments
+
+The 46 built-ins are not the limit. `PATCHES` builds an instrument out of
+numbers, and it can be used anywhere a built-in name can — including in
+`VOICES`, `SECTION_PATCH` and `LEAD_PATCH`.
+
+**A name you define beats the built-in of the same name.** Don't like the
+built-in `piano`? Write your own `piano`.
+
+The smallest one that makes a sound:
+
+```rhai
+let PATCHES = #{ plain: #{} };
+```
+
+Everything has a default. Write only what you want to change.
+
+### How it is put together
+
+```text
+  oscillators ─┬→ amp envelope ─→ filter ─→ drive ─→ delay ─→ gain
+  partials    ─┤       ↑            ↑
+  FM          ─┤    vibrato   filter envelope
+  attack noise─┘
+```
+
+### `osc` — the oscillators
+
+Stack as many as you like (up to 16). `mix` is relative, so `1.0` and `1.0`
+means half each.
+
+```rhai
+osc: [
+    #{ wave: "saw",    mix: 1.0, detune: -14 },
+    #{ wave: "saw",    mix: 1.0, detune:  14 },
+    #{ wave: "square", mix: 0.5, octave: -1 },
+],
+```
+
+| Key | Meaning | Default |
+|---|---|---|
+| `wave` | `saw` / `square` / `sine` / `noise` | `saw` |
+| `mix` | how much of it | 1.0 |
+| `detune` | cents off (100 = a semitone). ±4800 | 0 |
+| `octave` | octaves up or down. ±4 | 0 |
+
+**Detuning two saws by ±10–20 cents is what makes a "fat" lead.** Any more
+and it stops sounding like one note.
+
+### `env` — the shape of the volume
+
+```rhai
+env: #{ a: 0.008, d: 0.20, s: 0.75, r: 0.12 },
+```
+
+| Key | Meaning |
+|---|---|
+| `a` | seconds to rise. 0.001 is a hit, 0.3 is a breath |
+| `d` | seconds to fall to the sustain level |
+| `s` | the level it holds at (0–1). **0 means it dies away** — right for a plucked string |
+| `r` | seconds to fade after the note ends |
+
+### `filter` — taking the top off
+
+```rhai
+filter: #{ kind: "ladder", base: 700, sweep: 7000, res: 0.35, vel: 1500,
+           env: #{ a: 0.004, d: 0.25, curve: 2.2 } },
+```
+
+| Key | Meaning | Default |
+|---|---|---|
+| `kind` | `ladder` (= `lowpass`) / `highpass` / `bandpass` / `none` | `ladder` if you wrote anything else here |
+| `base` | Hz at its most closed | 1200 |
+| `sweep` | how many Hz the envelope opens it | 4000 |
+| `res` | resonance, 0–0.95. **Above 0.8 it starts to whistle** | 0.2 |
+| `track` | how much it follows pitch. 1.0 = high notes open further | 0 |
+| `vel` | extra Hz when hit hard | 0 |
+| `env.a` `env.d` `env.curve` | the shape it opens with | 0.001 / 0.08 / 2.0 |
+
+**`base` low + `sweep` high is the classic "pluck".** The filter slams open
+and shuts again.
+
+### `partials` — inharmonic tones
+
+`[pitch multiple, level, seconds to die]`, added directly. Real bells and
+gongs have partials that are **not** whole multiples, which is exactly why
+they don't sound like a sawtooth.
+
+```rhai
+osc: [],
+partials: [[1.0, 0.5, 2.4], [2.76, 0.28, 1.6], [5.40, 0.16, 1.0]],
+```
+
+Those three numbers (1, 2.76, 5.4) are roughly a real church bell.
+
+### `attack` — noise at the front
+
+```rhai
+attack: #{ amount: 0.22, hp: 2500, a: 0.0003, d: 0.006 },
+```
+
+The fingernail on a string, the chiff of a flute. `hp` cuts everything
+below it, so the burst sits on top instead of thickening the low end.
+
+### `fm` — metallic
+
+```rhai
+fm: #{ ratio: 3.5, index: 6.0, decay: 0.4 },
+```
+
+One wave wobbles the pitch of another. `ratio` is whole (2, 3) for musical
+results and fractional (3.5, 5.7) for clangy ones. `index` is how hard.
+
+### `vibrato` / `delay` / `drive` / `gain` / `ring`
+
+```rhai
+vibrato: #{ rate: 5.2, depth: 0.008, delay: 0.3 },  // rate Hz, depth 0.01 ≈ ±17 cents
+delay:   #{ time: 0.12, feedback: 0.4, mix: 0.3 },
+drive: 1.6,   // 1.0 = clean. Above 2 it is clearly distorted
+gain: 0.55,   // final level
+ring: 0.18,   // seconds it keeps sounding after the note ends
+```
+
+**`ring` is what makes fast passages run together.** Bells want 1–2s,
+a piano 0.4s, a lead 0.
+
+### Recipes to start from
+
+```rhai
+let PATCHES = #{
+    // Fat lead
+    fatsaw: #{
+        osc: [#{ wave: "saw", detune: -14 }, #{ wave: "saw", detune: 14 },
+              #{ wave: "saw", mix: 0.6, octave: -1 }],
+        env: #{ a: 0.008, d: 0.20, s: 0.75, r: 0.12 },
+        filter: #{ base: 700, sweep: 7000, res: 0.35, vel: 1500 },
+        drive: 1.6, gain: 0.55,
+    },
+    // Glass bell
+    glassbell: #{
+        osc: [],
+        partials: [[1.0, 0.5, 2.4], [2.76, 0.28, 1.6], [5.40, 0.16, 1.0]],
+        env: #{ a: 0.001, d: 2.5, s: 0.0, r: 0.6 },
+        gain: 1.2, ring: 1.8,
+    },
+    // Plucked string
+    pickedstring: #{
+        osc: [#{ wave: "saw", mix: 0.6 }, #{ wave: "square", mix: 0.4 }],
+        env: #{ a: 0.001, d: 0.45, s: 0.0, r: 0.10 },
+        filter: #{ base: 1400, sweep: 6000, res: 0.30 },
+        attack: #{ amount: 0.22, hp: 2500, a: 0.0003, d: 0.006 },
+        ring: 0.18,
+    },
+    // Breathy pipe — noise through a narrow band is a flute
+    airy: #{
+        osc: [#{ wave: "noise" }],
+        filter: #{ kind: "bandpass", base: 1200, res: 0.6 },
+        env: #{ a: 0.08, d: 0.2, s: 0.8, r: 0.15 },
+        vibrato: #{ rate: 5.2, depth: 0.008, delay: 0.3 },
+        gain: 1.5,
+    },
+    // Deep sub
+    deepsub: #{
+        osc: [#{ wave: "sine" }, #{ wave: "sine", mix: 0.3, octave: -1 }],
+        env: #{ a: 0.004, d: 0.1, s: 0.9, r: 0.08 },
+        filter: #{ base: 140, sweep: 0, res: 0.1 },
+        gain: 1.0,
+    },
+};
+```
+
+### Checks the loader makes
+
+Bad numbers stop the load with a reason, so you find out before you listen:
+
+- no sound source at all (`osc` empty with no `partials` and no `attack`)
+- every `mix` is 0
+- `res` above 0.95 (it would self-oscillate rather than play)
+- `env` times outside 0–30s, `drive` outside 0.1–20
+- an unknown `wave` or filter `kind` — the message lists the valid ones
+
+`tone check <song>` runs all of it.
+
+### Asking an AI for a sound
+
+This whole section is the interface. Describe the sound in words:
+
+> Following `SONGFILE.md`, add a `PATCHES` entry called `icepad` —
+> a cold, slow, breathy pad that opens over about a second.
+
+Then `tone render <song>` and listen. Sound design is "make one, fix it",
+and every number here is a number an AI can adjust on being told
+"too dull" or "too harsh".
+
+## 11. Common traps
 
 | Symptom | Cause |
 |---|---|
@@ -596,7 +792,7 @@ Some instruments **ring past the note length**: `gamelan` 1.6s, `piano`
 
 ---
 
-## 11. Handing this to an AI
+## 12. Handing this to an AI
 
 Give it this file and ask:
 
@@ -619,11 +815,13 @@ Worth telling the AI up front:
 - Forgetting `ARRANGE` means **nothing plays**
 - Every melody bar must sum to one bar. `bar()` catches it immediately
 - Change the meter and the accompaniment patterns have to change with it
-- Instrument names must be one of the 46. An unknown name **silences the part**
+- Instrument names must be one of the 46, or something you defined in
+  `PATCHES` (§10). An unknown name **silences the part**
+- If none of the 46 fits, **write the instrument** (§10) rather than settling
 
 ---
 
-## 12. Everything, in one table
+## 13. Everything, in one table
 
 | Name | Required | Shape | Default |
 |---|---|---|---|
@@ -652,6 +850,7 @@ Worth telling the AI up front:
 | `AUTOMATION` | | part → lanes | none |
 | `SECTION_PATCH` | | section → part → instrument | none |
 | `LEAD_PATCH` | | section → instrument | none |
+| `PATCHES` | | name → instrument recipe | none |
 | `SCALE` | | array of semitones | none |
 | `SCALE_ROOT` | | number | 0 |
 | `SIDECHAIN` | | `[depth, a, h, r]` | `[0.70, 0.003, 0.020, 0.200]` |
