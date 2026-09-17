@@ -707,11 +707,16 @@ fn read_recipe(v: &Dynamic, name: &str) -> R<recipe::Recipe> {
                 },
                 None => recipe::Wave::Saw,
             };
+            let dflt = recipe::Osc::default();
             r.osc.push(recipe::Osc {
                 wave,
                 mix: mnum(&om, "mix", 1.0)?,
                 detune: mnum(&om, "detune", 0.0)?,
                 octave: mnum(&om, "octave", 0.0)? as i32,
+                // 弦のときだけ効く
+                decay: mnum(&om, "decay", dflt.decay)?,
+                bright: mnum(&om, "bright", dflt.bright)?,
+                pick: mnum(&om, "pick", dflt.pick)?,
             });
         }
     }
@@ -820,6 +825,20 @@ fn read_recipe(v: &Dynamic, name: &str) -> R<recipe::Recipe> {
             feedback: mnum(&dm, "feedback", 0.3)?,
             mix: mnum(&dm, "mix", 0.0)?,
         };
+    }
+
+    // 胴鳴り
+    if let Some(list) = field(&m, "body") {
+        for (i, it) in arr(list, &at("body"))?.iter().enumerate() {
+            let t = arr(it, &format!("{}[{i}]", at("body")))?;
+            if t.len() < 3 {
+                return shape(format!(
+                    "{}[{i}] は [中心の高さ, 鋭さ, 混ぜる量] の3つで書いてください",
+                    at("body")
+                ));
+            }
+            r.body.push((num(&t[0], "高さ")?, num(&t[1], "鋭さ")?, num(&t[2], "混ぜる量")?));
+        }
     }
 
     r.drive = mnum(&m, "drive", r.drive)?;

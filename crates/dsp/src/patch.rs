@@ -1,5 +1,8 @@
 //! 音色。46 種。
 //!
+//! ここは Rust の関数として書いてあるもの。数で書いた基本の楽器は
+//! [`crate::kit`]、曲ファイルで作るものは [`crate::recipe`]。
+//!
 //! Python 版（synth.py）からの移植。音を決めている数字も、層の重ね方も
 //! そのまま持ってきてある。なぜその値なのかは Python 側のコメントに残る。
 //!
@@ -1217,7 +1220,24 @@ pub fn fx_riser(n: usize, vel: f32, seed: u64) -> Vec<f32> {
 // ================================================================ 登録
 
 /// 名前から音色を引く。`None` なら知らない名前。
+///
+/// ここに無ければ [`crate::kit`]（作り方を数で書いた楽器）も見る。
 pub fn render(name: &str, cfg: &Cfg, freq: f32, n: usize, vel: f32, seed: u64) -> Option<Vec<f32>> {
+    if let Some(r) = crate::kit::get(name) {
+        return Some(crate::recipe::render(&r, freq, n, vel, seed));
+    }
+    render_builtin(name, cfg, freq, n, vel, seed)
+}
+
+/// Rust の関数として書いてある46音色。
+fn render_builtin(
+    name: &str,
+    cfg: &Cfg,
+    freq: f32,
+    n: usize,
+    vel: f32,
+    seed: u64,
+) -> Option<Vec<f32>> {
     let f = match name {
         "supersaw" => supersaw,
         "acid" => acid,
@@ -1271,6 +1291,14 @@ pub fn render(name: &str, cfg: &Cfg, freq: f32, n: usize, vel: f32, seed: u64) -
 }
 
 /// 使える音色の名前。Python 版の `PATCHES` と同じ 46 本。
+/// 使える音色の名前を全部。Rust で書いた46種＋数で書いた楽器。
+pub fn all_names() -> Vec<&'static str> {
+    let mut v: Vec<&'static str> = NAMES.to_vec();
+    v.extend_from_slice(crate::kit::NAMES);
+    v
+}
+
+/// Rust の関数として書いてある音色の名前。
 pub const NAMES: &[&str] = &[
     "supersaw", "acid", "stab", "pluck", "hardlead", "wobble", "brass", "shamisen", "harpsi",
     "bell", "organ", "steelpan", "marimba", "choir", "piano", "koto", "brightsaw", "squarelead",
@@ -1285,6 +1313,9 @@ pub const NAMES: &[&str] = &[
 /// 打弦・撥弦系は鍵盤や指を離しても余韻が残るので、音価ぴったりで切ると
 /// 音と音のあいだに穴が空いて「分離して」聞こえる。
 pub fn ring(name: &str) -> f32 {
+    if let Some(r) = crate::kit::get(name) {
+        return r.ring;
+    }
     match name {
         "piano" => 0.42,
         "crystal" => 0.30,
@@ -1316,6 +1347,15 @@ mod tests {
     #[test]
     fn all_46_patches_are_reachable() {
         assert_eq!(NAMES.len(), 46, "音色の数が合わない");
+        // 数で書いた楽器も合わせて、全部が名前で引けること
+        let all = all_names();
+        assert_eq!(all.len(), 46 + crate::kit::NAMES.len());
+        for n in &all {
+            assert!(
+                render(n, &Cfg::default(), 220.0, 4800, 1.0, 1).is_some(),
+                "{n} が名前で引けない"
+            );
+        }
         let cfg = Cfg::default();
         for name in NAMES {
             assert!(render(name, &cfg, 220.0, 100, 1.0, 0).is_some(), "引けない: {name}");

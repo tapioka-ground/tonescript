@@ -462,6 +462,38 @@ fn every_patch_example_actually_makes_a_sound() {
 }
 
 #[test]
+fn the_ordinary_instruments_are_usable_by_name() {
+    // §9 に並べた23種が、名前を書くだけで鳴ること
+    for name in [
+        "guitar", "nylon", "eguitar", "distguitar", "ebass", "ukulele", "banjo", "mandolin",
+        "harp", "pizzicato", "rhodes", "clav", "vibraphone", "glocken", "trumpet", "sax",
+        "clarinet", "oboe", "horn", "violin", "cello", "accordion", "harmonica",
+    ] {
+        let src = format!(
+            r#"let BPM = 120;
+               let SECTIONS = [["A", 1, "p", "k", "m", 1.0]];
+               let VOICES = #{{ lead: #{{ ch: 0, patch: "{name}" }} }};
+               let MELODY = #{{ "1": bar([[16, "A4"]]) }};
+               let ARRANGE = #{{ "1": ["lead"] }};"#
+        );
+        let s = load(&src);
+        assert_eq!(s.voices["lead"].patch.as_deref(), Some(name));
+        // 名前が引けて、本当に音になること
+        let w = tonescript_dsp::patch::render(
+            name,
+            &tonescript_dsp::patch::Cfg::default(),
+            261.63,
+            24_000,
+            1.0,
+            3,
+        )
+        .unwrap_or_else(|| panic!("{name} が引けない"));
+        let rms = (w.iter().map(|v| v * v).sum::<f32>() / w.len() as f32).sqrt();
+        assert!(rms > 0.002, "{name} が無音（実効 {rms}）");
+    }
+}
+
+#[test]
 fn a_song_patch_beats_the_built_in_one() {
     // 同じ名前なら曲ファイル側が勝つ。内蔵の音色を作り替えられる
     let src = r#"

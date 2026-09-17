@@ -553,9 +553,12 @@ let SCALE_ROOT = 9;                    // A (C=0, A=9)
 
 ---
 
-## 9. The 46 instruments
+## 9. The 69 instruments
 
-`tone patches` prints them.
+`tone patches` prints them. They come in two kinds, and both are used the
+same way — just a name in `VOICES`.
+
+**Synth voices (46)** — written as code, tuned by hand.
 
 | Family | Names |
 |---|---|
@@ -567,7 +570,29 @@ let SCALE_ROOT = 9;                    // A (C=0, A=9)
 | Winds | `flute` `quena` `bansuri` `ocarina` `whistle` `panflute` `duduk` `didge` |
 | Plucked | `sitar` `oud` |
 
-Rough guidance:
+
+**Ordinary instruments (23)** — written as recipes (§10), so you can copy
+one into your song file and change it.
+
+| Family | Names |
+|---|---|
+| Plucked strings | `guitar` `nylon` `eguitar` `distguitar` `ebass` `ukulele` `banjo` `mandolin` `harp` `pizzicato` |
+| Keys, tuned metal | `rhodes` `clav` `vibraphone` `glocken` |
+| Winds | `trumpet` `sax` `clarinet` `oboe` `horn` |
+| Bowed | `violin` `cello` |
+| Reeds | `accordion` `harmonica` |
+
+**How close they get, honestly.** The plucked strings model the actual
+string — a wave running up and down it, losing its highs at each end — so
+they hold up on their own. Keys and tuned metal come out well, because
+their overtones are simple to begin with. The winds are *plausible*, not
+real: a real one is breath and lips fighting a tube, which isn't modelled
+here. Bowed strings are the furthest off.
+
+Drums, piano and orchestra recorded from life are **not** in reach of any
+of this, which is why sample libraries are tens of gigabytes.
+
+Rough guidance for the synth voices:
 
 - **Fast lead** — `supersaw`, `hardlead`, `brightsaw`. Rich enough to cut through
 - **Quiet passages** — `piano`, `crystal`, `strings`. `crystal` clears as it sustains
@@ -623,7 +648,7 @@ osc: [
 
 | Key | Meaning | Default |
 |---|---|---|
-| `wave` | `saw` / `square` / `sine` / `noise` | `saw` |
+| `wave` | `saw` / `square` / `sine` / `noise` / `string` | `saw` |
 | `mix` | how much of it | 1.0 |
 | `detune` | cents off (100 = a semitone). ±4800 | 0 |
 | `octave` | octaves up or down. ±4 | 0 |
@@ -663,6 +688,39 @@ filter: #{ kind: "ladder", base: 700, sweep: 7000, res: 0.35, vel: 1500,
 
 **`base` low + `sweep` high is the classic "pluck".** The filter slams open
 and shuts again.
+
+
+### `wave: "string"` — a real plucked string
+
+The other waves are shapes. This one is **the string itself**: a burst of
+noise runs up and down a tube the length of the string, losing a little of
+its top each time it turns around. That is why a real string goes dull as
+it dies, and why "a sawtooth through a filter" never quite sounds plucked.
+
+```rhai
+osc: [#{ wave: "string", decay: 3.2, bright: 0.62, pick: 0.20 }],
+```
+
+| Key | Meaning | Default |
+|---|---|---|
+| `decay` | seconds it rings. 0.5 is a muted pluck, 5 an open one | 2.0 |
+| `bright` | 0–1. Low is nylon and goes dull fast; high is steel and holds | 0.5 |
+| `pick` | where you pluck, 0–1. 0.5 is the middle (round), 0.1 near the bridge (hard) | 0.25 |
+
+It ignores `vibrato` and `fm` — you can't wobble a plucked string.
+
+### `body` — the box it is in
+
+`[centre Hz, sharpness, how much]`. Half of what makes a guitar sound like
+a guitar is not the string but the **box**. Without it the string is thin.
+
+```rhai
+body: [[100.0, 6.0, 0.45], [205.0, 8.0, 0.25], [430.0, 9.0, 0.12]],
+```
+
+Those are roughly an acoustic guitar. A ukulele's box is smaller, so its
+peaks sit higher (240Hz, 520Hz). An amplifier cabinet is a wide, soft peak
+around 400Hz.
 
 ### `partials` — inharmonic tones
 

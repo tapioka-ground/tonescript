@@ -1,6 +1,6 @@
 # Tonescript
 
-A DAW whose project file is text. 46 instruments, zero samples. Free, MIT.
+A DAW whose project file is text. 69 instruments, zero samples. Free, MIT.
 
 Piano roll with a velocity lane, mixer with meters, automation, undo,
 autosave, MIDI files in and out.
@@ -13,7 +13,7 @@ No plugins, no sample libraries. A 34-second track renders in 0.24s.
 The song is plain text, so you can write it by hand — or hand
 [SONGFILE.md](SONGFILE.md) to an AI and have it write it for you.
 **The instruments are text too**, so an AI can design the sounds, not just
-the notes.
+the notes. Guitars and basses are modelled strings, not sampled ones.
 
 日本語は下にあります。
 
@@ -49,7 +49,7 @@ tone patches  [song]    list instruments (plus the song's own)
 ## What's inside
 
 ```
-crates/dsp/      oscillators, envelopes, filters, 46 instruments, 11 drums, reverb
+crates/dsp/      oscillators, envelopes, filters, 69 instruments, 11 drums, reverb
                  and the recipe format for instruments you write yourself
 crates/song/     song files (Rhai), time signatures, automation
 crates/render/   arrangement, synthesis, mixing, mastering, WAV
@@ -103,14 +103,14 @@ and every instrument can be compared sample by sample.
 | 920 notes | 2139 ms | 183 ms | 11.7× |
 | render `example` | 4.30 s | 0.24 s | 18× |
 
-All 11 drums match Python exactly. Of 46 instruments, 20 are sample-exact
+All 11 drums match Python exactly. Of the 46 ported instruments, 20 are sample-exact
 and 26 correlate above 0.999 — that difference is the wavetable
 interpolation above, which is the improvement.
 
 The 21× on `highpass` is where Python's cleverness disappeared: an FFT
 convolution became a three-line loop.
 
-419 tests.
+437 tests.
 
 ## Not ported
 
@@ -127,7 +127,7 @@ make with it, nor any samples or voice banks you supply.
 
 # Tonescript（日本語）
 
-プロジェクトファイルがテキストの DAW。楽器46種、音源ゼロ。無料・MIT。
+プロジェクトファイルがテキストの DAW。楽器69種、音源ゼロ。無料・MIT。
 
 ピアノロール（強さのレーン付き）、針付きミキサー、オートメーション、
 取り消し、自動保存、MIDI の読み書き。
@@ -140,6 +140,7 @@ MIDI 鍵盤を挿せば弾ける。マイクから歌も録れる（メトロノ
 曲はただのテキストなので、手で書いてもいいし、
 [SONGFILE.ja.md](SONGFILE.ja.md) を AI に渡して書かせてもいい。
 **音色もテキスト**なので、曲だけでなく音そのものを作らせられる。
+ギターやベースは録った音ではなく、弦そのものを計算している。
 
 ## すぐ試す
 
@@ -171,7 +172,7 @@ tone patches  [曲]      音色の一覧（曲が作った音色も）
 ## 何が入っているか
 
 ```
-crates/dsp/      発振器・エンベロープ・フィルタ・46音色・11ドラム・残響
+crates/dsp/      発振器・エンベロープ・フィルタ・69音色・11ドラム・残響
                  自分で音色を作るための書式
 crates/song/     曲ファイル（Rhai）、拍子、オートメーション
 crates/render/   編曲・合成・ミックス・マスタリング・WAV
@@ -226,13 +227,13 @@ AI に書かせるなら「SONGFILE.ja.md に従って songs/x.rhai を書いて
 | 920 ノート | 2139 ms | 183 ms | 11.7倍 |
 | `example` の書き出し | 4.30 s | 0.24 s | 18倍 |
 
-ドラム11種は全部一致。音色46種のうち20本がサンプル完全一致、26本が
+ドラム11種は全部一致。移植した音色46種のうち20本がサンプル完全一致、26本が
 相関 0.999 以上。差が出たぶんは上の補間の改善そのもの。
 
 `highpass` の21倍が「Python の賢さが消えた」ところ。FFT 畳み込みが
 3行のループになった。
 
-テスト 419 件。
+テスト 437 件。
 
 ## 移植しなかったもの
 

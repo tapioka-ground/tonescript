@@ -110,9 +110,14 @@ fn cmd_list() -> i32 {
 
 /// 音色の一覧。曲を渡せば、その曲が作った音色も出す。
 fn cmd_patches(name: Option<&String>) -> i32 {
-    let names = tonescript_dsp::patch::NAMES;
+    let names = tonescript_dsp::patch::all_names();
     println!("内蔵 {} 種:", names.len());
-    for row in names.chunks(6) {
+    println!("  --- 合成（Rust）");
+    for row in tonescript_dsp::patch::NAMES.chunks(6) {
+        println!("  {}", row.join("  "));
+    }
+    println!("  --- 基本の楽器（作り方を数で書いたもの。曲ファイルへ写して直せる）");
+    for row in tonescript_dsp::kit::NAMES.chunks(6) {
         println!("  {}", row.join("  "));
     }
     let Some(name) = name else {

@@ -38,11 +38,25 @@ pub struct Osc {
     pub detune: f32,
     /// 何オクターブ上下させるか
     pub octave: i32,
+    /// `string` のとき: 伸びる秒数
+    pub decay: f32,
+    /// `string` のとき: 明るさ 0〜1（低いほど早く丸くなる）
+    pub bright: f32,
+    /// `string` のとき: 弾く位置 0〜1（0.5 で真ん中、端ほど硬い）
+    pub pick: f32,
 }
 
 impl Default for Osc {
     fn default() -> Self {
-        Self { wave: Wave::Saw, mix: 1.0, detune: 0.0, octave: 0 }
+        Self {
+            wave: Wave::Saw,
+            mix: 1.0,
+            detune: 0.0,
+            octave: 0,
+            decay: 2.0,
+            bright: 0.5,
+            pick: 0.25,
+        }
     }
 }
 
@@ -54,6 +68,9 @@ pub enum Wave {
     Sine,
     /// 音程を持たない雑音。息や打撃に使う
     Noise,
+    /// 撥いた弦。波形ではなく弦そのものを真似る（[`crate::string`]）。
+    /// ギター・ベース・琴・ハープはこれでないと弦に聞こえない
+    String,
 }
 
 impl Wave {
@@ -63,11 +80,12 @@ impl Wave {
             "square" => Wave::Square,
             "sine" => Wave::Sine,
             "noise" => Wave::Noise,
+            "string" => Wave::String,
             _ => return None,
         })
     }
 
-    pub const NAMES: [&'static str; 4] = ["saw", "square", "sine", "noise"];
+    pub const NAMES: [&'static str; 5] = ["saw", "square", "sine", "noise", "string"];
 }
 
 /// 音量のかたち。
@@ -201,6 +219,9 @@ pub struct Recipe {
     pub vibrato: Vibrato,
     pub fm: Fm,
     pub delay: Delay,
+    /// 胴鳴り `[中心の高さ, 鋭さ, 混ぜる量]`。
+    /// ギターらしさの半分は弦ではなく胴にある
+    pub body: Vec<(f32, f32, f32)>,
     /// 歪み。1.0 で掛けない
     pub drive: f32,
     /// 最後の音量
@@ -220,6 +241,7 @@ impl Default for Recipe {
             vibrato: Vibrato::default(),
             fm: Fm::default(),
             delay: Delay::default(),
+            body: Vec::new(),
             drive: 1.0,
             gain: 0.7,
             ring: 0.0,
@@ -251,6 +273,17 @@ pub fn check(r: &Recipe) -> Result<(), String> {
         }
         if !(-4..=4).contains(&o.octave) {
             return Err(format!("osc[{i}] の octave が {} です。±4 までに", o.octave));
+        }
+        if o.wave == Wave::String {
+            if !(0.02..=20.0).contains(&o.decay) {
+                return Err(format!("osc[{i}] の decay が {} 秒です。0.02〜20 の間に", o.decay));
+            }
+            if !(0.0..=1.0).contains(&o.bright) {
+                return Err(format!("osc[{i}] の bright が {} です。0〜1 の間に", o.bright));
+            }
+            if !(0.0..=1.0).contains(&o.pick) {
+                return Err(format!("osc[{i}] の pick が {} です。0〜1 の間に", o.pick));
+            }
         }
     }
     let e = &r.env;
@@ -335,7 +368,14 @@ pub fn render(r: &Recipe, freq: f32, n: usize, vel: f32, seed: u64) -> Vec<f32> 
         let g = o.mix / total;
         let wave = match o.wave {
             Wave::Noise => (0..n).map(|_| rng.next_f64() as f32 * 2.0 - 1.0).collect::<Vec<f32>>(),
-            _ if wob.is_some() || fm.is_some() => {
+            // 弦は自分で減衰を持つ。音程の揺れは効かない（弦は揺らせない）
+            Wave::String => crate::string::pluck(
+                f0,
+                n,
+                crate::string::Pluck { decay: o.decay, bright: o.bright, pick: o.pick },
+                rng.next_u64(),
+            ),
+            _ if (wob.is_some() || fm.is_some()) && o.wave != Wave::String => {
                 // 音程が動く。列で渡す
                 let f: Vec<f32> = (0..n)
                     .map(|i| {
@@ -353,7 +393,7 @@ pub fn render(r: &Recipe, freq: f32, n: usize, vel: f32, seed: u64) -> Vec<f32> 
                     Wave::Saw => osc::saw_var(&f, phase),
                     Wave::Square => osc::square_var(&f, phase),
                     Wave::Sine => shape::sine_sweep(&f, phase),
-                    Wave::Noise => unreachable!(),
+                    Wave::Noise | Wave::String => unreachable!(),
                 }
             }
             Wave::Saw => osc::saw(f0, n, phase),
@@ -402,6 +442,11 @@ pub fn render(r: &Recipe, freq: f32, n: usize, vel: f32, seed: u64) -> Vec<f32> 
             pick = filter::highpass(&pick, a.hp);
         }
         shape::add_scaled(&mut out, &pick, a.amount);
+    }
+
+    // 胴鳴り。弦だけだと痩せて聞こえる
+    if !r.body.is_empty() {
+        out = crate::string::body(&out, &r.body);
     }
 
     // 歪み
