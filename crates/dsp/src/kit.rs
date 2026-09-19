@@ -61,7 +61,7 @@ pub fn get(name: &str) -> Option<Recipe> {
             // アンプの箱。本物のキャビネットは高い所が早く落ちる
             body: vec![(420.0, 3.0, 0.18), (1400.0, 2.5, 0.10)],
             drive: 1.25,
-            gain: 1.089,
+            gain: 1.122,
             ring: 1.4,
             ..d()
         },
@@ -72,7 +72,7 @@ pub fn get(name: &str) -> Option<Recipe> {
             filter: Filter { kind: FilterKind::Ladder, base: 2200.0, sweep: 0.0, res: 0.2, ..f() },
             body: vec![(400.0, 2.5, 0.22), (1100.0, 2.0, 0.14)],
             drive: 7.0,
-            gain: 0.329,
+            gain: 0.334,
             ring: 1.6,
             ..d()
         },
@@ -84,7 +84,7 @@ pub fn get(name: &str) -> Option<Recipe> {
             body: vec![(70.0, 4.0, 0.5), (240.0, 6.0, 0.15)],
             attack: Attack { amount: 0.08, hp: 1800.0, a: 0.0002, d: 0.008 },
             drive: 1.4,
-            gain: 1.484,
+            gain: 1.536,
             ring: 0.9,
             ..d()
         },
@@ -182,7 +182,7 @@ pub fn get(name: &str) -> Option<Recipe> {
                              env: (0.025, 0.2, 1.4), ..f() },
             body: vec![(440.0, 7.0, 0.35), (1200.0, 5.0, 0.2)],
             vibrato: Vibrato { rate: 4.8, depth: 0.004, delay: 0.35 },
-            gain: 1.293,
+            gain: 1.311,
             ..d()
         },
         "piccolo" => Recipe {
@@ -192,7 +192,7 @@ pub fn get(name: &str) -> Option<Recipe> {
             env: Env { a: 0.02, d: 0.08, s: 0.88, r: 0.07 },
             filter: Filter { kind: FilterKind::Bandpass, base: 2600.0, res: 0.4, track: 0.8, ..f() },
             vibrato: Vibrato { rate: 5.8, depth: 0.006, delay: 0.2 },
-            gain: 4.082,
+            gain: 4.158,
             ..d()
         },
         "recorder" => Recipe {
@@ -224,7 +224,7 @@ pub fn get(name: &str) -> Option<Recipe> {
             filter: Filter { kind: FilterKind::Ladder, base: 2400.0, sweep: 0.0, res: 0.25, ..f() },
             body: vec![(900.0, 6.0, 0.3), (2000.0, 5.0, 0.2)],
             drive: 1.6,
-            gain: 0.532,
+            gain: 0.527,
             ..d()
         },
 
@@ -238,7 +238,7 @@ pub fn get(name: &str) -> Option<Recipe> {
                              track: 0.5, env: (0.055, 0.32, 1.2), ..f() },
             body: vec![(220.0, 6.0, 0.35), (350.0, 7.0, 0.25), (600.0, 6.0, 0.15)],
             vibrato: Vibrato { rate: 5.4, depth: 0.007, delay: 0.28 },
-            gain: 0.804,
+            gain: 0.793,
             ..d()
         },
         "contrabass" => Recipe {
@@ -250,7 +250,7 @@ pub fn get(name: &str) -> Option<Recipe> {
                              track: 0.4, env: (0.07, 0.4, 1.2), ..f() },
             body: vec![(60.0, 5.0, 0.45), (130.0, 6.0, 0.25)],
             vibrato: Vibrato { rate: 4.4, depth: 0.005, delay: 0.35 },
-            gain: 1.183,
+            gain: 1.209,
             ..d()
         },
         "tremolostrings" => Recipe {
@@ -263,7 +263,7 @@ pub fn get(name: &str) -> Option<Recipe> {
             body: vec![(280.0, 6.0, 0.3), (460.0, 7.0, 0.2)],
             // 弓の往復そのもの。毎秒14回くらい
             tremolo: Tremolo { rate: 14.0, depth: 0.55 },
-            gain: 0.943,
+            gain: 0.923,
             ..d()
         },
         "slapbass" => Recipe {
@@ -275,7 +275,7 @@ pub fn get(name: &str) -> Option<Recipe> {
             body: vec![(80.0, 4.0, 0.45), (900.0, 5.0, 0.2)],
             attack: Attack { amount: 0.25, hp: 2500.0, a: 0.0002, d: 0.005 },
             drive: 2.2,
-            gain: 0.739,
+            gain: 0.776,
             ring: 0.6,
             ..d()
         },
@@ -286,7 +286,7 @@ pub fn get(name: &str) -> Option<Recipe> {
             filter: Filter { kind: FilterKind::Ladder, base: 900.0, sweep: 0.0, res: 0.2, ..f() },
             body: vec![(75.0, 4.0, 0.5), (260.0, 5.0, 0.18)],
             vibrato: Vibrato { rate: 4.5, depth: 0.004, delay: 0.25 },
-            gain: 1.747,
+            gain: 1.796,
             ring: 1.0,
             ..d()
         },
@@ -366,7 +366,7 @@ pub fn get(name: &str) -> Option<Recipe> {
             osc: vec![Osc { wave: Wave::Sine, ..o() }],
             fm: Fm { ratio: 3.0, index: 5.5, decay: 0.13 },
             env: Env { a: 0.002, d: 1.6, s: 0.22, r: 0.25 },
-            gain: 0.373,
+            gain: 0.383,
             ring: 0.5,
             ..d()
         },
@@ -376,7 +376,7 @@ pub fn get(name: &str) -> Option<Recipe> {
             env: Env { a: 0.0005, d: 0.4, s: 0.0, r: 0.04 },
             filter: Filter { kind: FilterKind::Ladder, base: 900.0, sweep: 4500.0, res: 0.3,
                              env: (0.0005, 0.06, 3.0), ..f() },
-            gain: 1.462,
+            gain: 1.443,
             ring: 0.15,
             ..d()
         },
@@ -398,12 +398,152 @@ pub fn get(name: &str) -> Option<Recipe> {
             osc: vec![],
             partials: vec![(1.0, 0.5, 1.2), (2.7, 0.3, 0.7), (5.4, 0.18, 0.4), (8.9, 0.08, 0.25)],
             env: Env { a: 0.0008, d: 1.2, s: 0.0, r: 0.3 },
-            gain: 0.618,
+            gain: 0.629,
             ring: 0.9,
             ..d()
         },
 
 
+
+
+        // ---- 和楽器。撥弦は物理模型が効く
+        "kotostring" => Recipe {
+            // 琴。柱で分けた絹弦。撥で弾く
+            osc: vec![Osc { wave: Wave::String, decay: 3.0, bright: 0.52, pick: 0.18, ..o() }],
+            env: Env { a: 0.001, d: 2.8, s: 1.0, r: 0.18 },
+            body: vec![(190.0, 5.0, 0.4), (450.0, 6.0, 0.18)],
+            attack: Attack { amount: 0.10, hp: 2800.0, a: 0.0002, d: 0.005 },
+            vibrato: Vibrato { rate: 5.0, depth: 0.008, delay: 0.4 },
+            gain: 0.681,
+            ring: 1.5,
+            ..d()
+        },
+        "shamisenstring" => Recipe {
+            // 三味線。皮を張った胴。撥が当たる音が要る
+            osc: vec![Osc { wave: Wave::String, decay: 1.1, bright: 0.82, pick: 0.09, ..o() }],
+            env: Env { a: 0.0006, d: 1.0, s: 1.0, r: 0.08 },
+            body: vec![(320.0, 4.0, 0.42), (900.0, 5.0, 0.22)],
+            attack: Attack { amount: 0.22, hp: 2600.0, a: 0.0002, d: 0.006 },
+            drive: 1.3,
+            gain: 0.767,
+            ring: 0.6,
+            ..d()
+        },
+        "biwa" => Recipe {
+            // 琵琶。太い弦を撥で叩く。サワリが鳴る
+            osc: vec![Osc { wave: Wave::String, decay: 1.8, bright: 0.86, pick: 0.07, ..o() }],
+            env: Env { a: 0.0005, d: 1.6, s: 1.0, r: 0.08 },
+            body: vec![(240.0, 5.0, 0.4), (820.0, 6.0, 0.25)],
+            attack: Attack { amount: 0.26, hp: 2400.0, a: 0.0002, d: 0.007 },
+            drive: 1.5,
+            gain: 0.703,
+            ring: 0.9,
+            ..d()
+        },
+        "sanshin" => Recipe {
+            // 三線。三味線より丸く、沖縄の音
+            osc: vec![Osc { wave: Wave::String, decay: 1.4, bright: 0.66, pick: 0.16, ..o() }],
+            env: Env { a: 0.0008, d: 1.3, s: 1.0, r: 0.08 },
+            body: vec![(280.0, 5.0, 0.4), (720.0, 6.0, 0.18)],
+            attack: Attack { amount: 0.14, hp: 2600.0, a: 0.0002, d: 0.006 },
+            gain: 0.576,
+            ring: 0.7,
+            ..d()
+        },
+        "kokyu" => Recipe {
+            // 胡弓。和の擦弦。細くて鼻に掛かる
+            osc: vec![Osc { wave: Wave::Saw, mix: 1.0, detune: -4.0, ..o() },
+                      Osc { wave: Wave::Saw, mix: 1.0, detune: 4.0, ..o() }],
+            env: Env { a: 0.06, d: 0.15, s: 0.86, r: 0.16 },
+            filter: Filter { kind: FilterKind::Bandpass, base: 1500.0, res: 0.45, track: 0.6, ..f() },
+            body: vec![(700.0, 9.0, 0.4), (1800.0, 7.0, 0.22)],
+            vibrato: Vibrato { rate: 6.0, depth: 0.009, delay: 0.2 },
+            gain: 1.574,
+            ..d()
+        },
+        "sho" => Recipe {
+            // 笙。17本の竹が同時に鳴る。雅楽のあの和音
+            osc: vec![Osc { wave: Wave::Pulse, mix: 1.0, width: 0.3, detune: -5.0, ..o() },
+                      Osc { wave: Wave::Pulse, mix: 0.8, width: 0.22, detune: 5.0, ..o() },
+                      Osc { wave: Wave::Saw, mix: 0.5, octave: 1, ..o() },
+                      Osc { wave: Wave::Saw, mix: 0.35, detune: 703.0, ..o() }],
+            env: Env { a: 0.12, d: 0.1, s: 0.92, r: 0.2 },
+            filter: Filter { kind: FilterKind::Ladder, base: 2600.0, sweep: 0.0, res: 0.2, ..f() },
+            body: vec![(1500.0, 6.0, 0.25)],
+            gain: 0.52,
+            ..d()
+        },
+        "hichiriki" => Recipe {
+            // 篳篥。雅楽の主旋律。強く、鼻に掛かって、揺れる
+            osc: vec![Osc { wave: Wave::Saw, mix: 0.7, ..o() },
+                      Osc { wave: Wave::Pulse, mix: 0.3, width: 0.25, ..o() }],
+            env: Env { a: 0.03, d: 0.12, s: 0.88, r: 0.1 },
+            filter: Filter { kind: FilterKind::Ladder, base: 900.0, sweep: 1800.0, res: 0.35,
+                             env: (0.025, 0.2, 1.4), ..f() },
+            body: vec![(1100.0, 9.0, 0.45), (2600.0, 7.0, 0.25)],
+            vibrato: Vibrato { rate: 5.0, depth: 0.010, delay: 0.25 },
+            drive: 1.6,
+            gain: 0.691,
+            ..d()
+        },
+
+        // ---- その他の民族楽器
+        "koto12" => Recipe {
+            // 大正琴。金属弦を鍵盤で押さえる
+            osc: vec![Osc { wave: Wave::String, decay: 1.8, bright: 0.80, pick: 0.12, ..o() }],
+            env: Env { a: 0.0008, d: 1.6, s: 1.0, r: 0.1 },
+            body: vec![(400.0, 7.0, 0.35), (1100.0, 8.0, 0.18)],
+            vibrato: Vibrato { rate: 6.5, depth: 0.008, delay: 0.2 },
+            gain: 0.558,
+            ring: 0.9,
+            ..d()
+        },
+        "charango" => Recipe {
+            // チャランゴ。小さくて高い。アンデスの弦
+            osc: vec![
+                Osc { wave: Wave::String, decay: 1.1, bright: 0.72, pick: 0.20, detune: -5.0, ..o() },
+                Osc { wave: Wave::String, decay: 1.1, bright: 0.72, pick: 0.20, detune: 5.0, ..o() },
+            ],
+            env: Env { a: 0.0008, d: 1.0, s: 1.0, r: 0.07 },
+            body: vec![(380.0, 7.0, 0.4), (860.0, 8.0, 0.2)],
+            gain: 0.629,
+            ring: 0.6,
+            ..d()
+        },
+        "kora" => Recipe {
+            // コラ。西アフリカの21弦。ハープに近いが胴が瓢箪
+            osc: vec![Osc { wave: Wave::String, decay: 2.6, bright: 0.58, pick: 0.25, ..o() }],
+            env: Env { a: 0.001, d: 2.4, s: 1.0, r: 0.15 },
+            body: vec![(210.0, 4.0, 0.45), (520.0, 5.0, 0.2)],
+            gain: 0.579,
+            ring: 1.3,
+            ..d()
+        },
+        "steeldrum" => Recipe {
+            // スチールドラム。ドラム缶を叩き出した音板
+            osc: vec![Osc { wave: Wave::Sine, mix: 0.7, ..o() }],
+            partials: vec![(2.0, 0.25, 1.2), (3.0, 0.15, 0.8), (4.9, 0.08, 0.5)],
+            env: Env { a: 0.002, d: 1.4, s: 0.0, r: 0.3 },
+            body: vec![(700.0, 6.0, 0.2)],
+            gain: 0.53,
+            ring: 1.0,
+            ..d()
+        },
+        "sitarstring" => Recipe {
+            // シタール。共鳴弦が一緒に鳴るので、賑やかに伸びる
+            osc: vec![
+                Osc { wave: Wave::String, decay: 3.5, bright: 0.85, pick: 0.10, ..o() },
+                Osc { wave: Wave::String, mix: 0.3, decay: 4.0, bright: 0.9, pick: 0.3,
+                      octave: 1, detune: 8.0, ..o() },
+            ],
+            env: Env { a: 0.0008, d: 3.2, s: 1.0, r: 0.2 },
+            body: vec![(240.0, 5.0, 0.4), (1400.0, 7.0, 0.25)],
+            attack: Attack { amount: 0.18, hp: 2600.0, a: 0.0002, d: 0.006 },
+            drive: 1.4,
+            gain: 0.792,
+            ring: 1.8,
+            ..d()
+        },
 
         // ---- 敷くもの（パッド）。今まで1つも無かった
         "warmpad" => Recipe {
@@ -414,7 +554,7 @@ pub fn get(name: &str) -> Option<Recipe> {
             env: Env { a: 0.55, d: 0.6, s: 0.85, r: 0.9 },
             filter: Filter { kind: FilterKind::Ladder, base: 500.0, sweep: 2200.0, res: 0.2,
                              track: 0.4, env: (0.5, 1.2, 1.0), ..f() },
-            gain: 1.042,
+            gain: 1.201,
             ring: 0.6,
             ..d()
         },
@@ -428,7 +568,7 @@ pub fn get(name: &str) -> Option<Recipe> {
             filter: Filter { kind: FilterKind::Ladder, base: 1200.0, sweep: 3000.0, res: 0.25,
                              env: (0.7, 1.5, 1.0), ..f() },
             tremolo: Tremolo { rate: 0.7, depth: 0.2 },
-            gain: 0.914,
+            gain: 1.031,
             ring: 1.0,
             ..d()
         },
@@ -442,7 +582,7 @@ pub fn get(name: &str) -> Option<Recipe> {
                              env: (0.55, 1.2, 1.0), ..f() },
             body: vec![(600.0, 8.0, 0.35), (1100.0, 8.0, 0.25)],
             vibrato: Vibrato { rate: 4.6, depth: 0.004, delay: 0.8 },
-            gain: 0.963,
+            gain: 1.101,
             ring: 0.8,
             ..d()
         },
@@ -454,7 +594,7 @@ pub fn get(name: &str) -> Option<Recipe> {
             env: Env { a: 0.9, d: 1.0, s: 0.8, r: 1.4 },
             filter: Filter { kind: FilterKind::Ladder, base: 260.0, sweep: 7000.0, res: 0.35,
                              env: (1.6, 2.0, 0.8), ..f() },
-            gain: 1.161,
+            gain: 1.355,
             ring: 1.2,
             ..d()
         },
@@ -467,7 +607,7 @@ pub fn get(name: &str) -> Option<Recipe> {
             filter: Filter { kind: FilterKind::Ladder, base: 1500.0, sweep: 900.0, res: 0.15,
                              env: (0.2, 0.6, 1.0), ..f() },
             tremolo: Tremolo { rate: 5.4, depth: 0.15 },
-            gain: 0.933,
+            gain: 1.062,
             ring: 0.4,
             ..d()
         },
@@ -478,7 +618,7 @@ pub fn get(name: &str) -> Option<Recipe> {
             env: Env { a: 0.3, d: 1.5, s: 0.55, r: 1.2 },
             filter: Filter { kind: FilterKind::Ladder, base: 1400.0, sweep: 2000.0, res: 0.2,
                              env: (0.25, 1.0, 1.0), ..f() },
-            gain: 0.541,
+            gain: 0.568,
             ring: 1.4,
             ..d()
         },
@@ -512,7 +652,7 @@ pub fn get(name: &str) -> Option<Recipe> {
             env: Env { a: 0.01, d: 0.1, s: 0.85, r: 0.08 },
             filter: Filter { kind: FilterKind::Ladder, base: 1200.0, sweep: 3500.0, res: 0.3,
                              vel: 1500.0, env: (0.008, 0.2, 1.6), ..f() },
-            gain: 0.558,
+            gain: 0.594,
             ..d()
         },
         "hoover" => Recipe {
@@ -526,7 +666,7 @@ pub fn get(name: &str) -> Option<Recipe> {
                              env: (0.004, 0.5, 1.6), ..f() },
             vibrato: Vibrato { rate: 5.0, depth: 0.012, delay: 0.06 },
             drive: 2.4,
-            gain: 0.579,
+            gain: 0.647,
             ..d()
         },
         "organbass" => Recipe {
@@ -548,7 +688,7 @@ pub fn get(name: &str) -> Option<Recipe> {
                              env: (0.0008, 0.03, 4.0), ..f() },
             attack: Attack { amount: 0.1, hp: 2500.0, a: 0.0002, d: 0.004 },
             drive: 1.5,
-            gain: 1.0,
+            gain: 1.071,
             ..d()
         },
 
@@ -559,7 +699,7 @@ pub fn get(name: &str) -> Option<Recipe> {
             fm: Fm { ratio: 2.0, index: 7.0, decay: 0.09 },
             env: Env { a: 0.002, d: 1.1, s: 0.18, r: 0.2 },
             drive: 2.2,
-            gain: 0.252,
+            gain: 0.257,
             ring: 0.4,
             ..d()
         },
@@ -568,7 +708,7 @@ pub fn get(name: &str) -> Option<Recipe> {
             osc: vec![Osc { wave: Wave::Sine, ..o() }],
             partials: vec![(4.0, 0.14, 0.9), (8.1, 0.06, 0.5)],
             env: Env { a: 0.001, d: 1.6, s: 0.0, r: 0.35 },
-            gain: 0.375,
+            gain: 0.381,
             ring: 1.0,
             ..d()
         },
@@ -577,7 +717,7 @@ pub fn get(name: &str) -> Option<Recipe> {
             osc: vec![Osc { wave: Wave::Sine, ..o() }],
             partials: vec![(3.0, 0.2, 0.6), (6.3, 0.1, 0.35), (10.7, 0.05, 0.2)],
             env: Env { a: 0.0008, d: 1.0, s: 0.0, r: 0.25 },
-            gain: 0.368,
+            gain: 0.373,
             ring: 0.7,
             ..d()
         },
@@ -588,7 +728,7 @@ pub fn get(name: &str) -> Option<Recipe> {
             partials: vec![(5.4, 0.12, 0.35)],
             env: Env { a: 0.001, d: 0.7, s: 0.0, r: 0.12 },
             attack: Attack { amount: 0.12, hp: 3500.0, a: 0.0002, d: 0.004 },
-            gain: 0.427,
+            gain: 0.432,
             ring: 0.35,
             ..d()
         },
@@ -599,7 +739,7 @@ pub fn get(name: &str) -> Option<Recipe> {
                       Osc { wave: Wave::Sine, mix: 0.4, octave: -1, ..o() }],
             env: Env { a: 0.05, d: 0.08, s: 0.92, r: 0.12 },
             filter: Filter { kind: FilterKind::Ladder, base: 1800.0, sweep: 0.0, res: 0.12, ..f() },
-            gain: 0.618,
+            gain: 0.607,
             ..d()
         },
         "leslie" => Recipe {
@@ -622,7 +762,7 @@ pub fn get(name: &str) -> Option<Recipe> {
             osc: vec![Osc { wave: Wave::Sine, ..o() }],
             partials: vec![(3.0, 0.3, 0.12), (6.8, 0.12, 0.07)],
             env: Env { a: 0.0006, d: 0.28, s: 0.0, r: 0.06 },
-            gain: 0.392,
+            gain: 0.381,
             ring: 0.15,
             ..d()
         },
@@ -632,7 +772,7 @@ pub fn get(name: &str) -> Option<Recipe> {
             partials: vec![(1.0, 0.4, 4.0), (1.95, 0.3, 3.0), (2.99, 0.2, 2.2),
                            (4.18, 0.12, 1.5), (5.43, 0.07, 1.0)],
             env: Env { a: 0.002, d: 4.0, s: 0.0, r: 1.0 },
-            gain: 0.679,
+            gain: 0.691,
             ring: 3.0,
             ..d()
         },
@@ -655,7 +795,7 @@ pub fn get(name: &str) -> Option<Recipe> {
             attack: Attack { amount: 0.3, hp: 400.0, a: 0.0004, d: 0.02 },
             body: vec![(90.0, 4.0, 0.4)],
             drive: 1.3,
-            gain: 0.396,
+            gain: 0.406,
             ring: 0.8,
             ..d()
         },
@@ -676,7 +816,7 @@ pub fn get(name: &str) -> Option<Recipe> {
             partials: vec![(2.8, 0.3, 0.05), (5.1, 0.15, 0.03)],
             env: Env { a: 0.0003, d: 0.09, s: 0.0, r: 0.03 },
             attack: Attack { amount: 0.25, hp: 2000.0, a: 0.0002, d: 0.004 },
-            gain: 0.4,
+            gain: 0.379,
             ring: 0.05,
             ..d()
         },
@@ -701,7 +841,7 @@ pub fn get(name: &str) -> Option<Recipe> {
                              env: (0.05, 0.3, 1.2), ..f() },
             body: vec![(730.0, 9.0, 0.5), (1090.0, 9.0, 0.35), (2440.0, 7.0, 0.15)],
             vibrato: Vibrato { rate: 5.2, depth: 0.006, delay: 0.35 },
-            gain: 0.81,
+            gain: 0.801,
             ..d()
         },
         "ooh" => Recipe {
@@ -713,7 +853,7 @@ pub fn get(name: &str) -> Option<Recipe> {
                              env: (0.06, 0.3, 1.2), ..f() },
             body: vec![(300.0, 10.0, 0.55), (870.0, 9.0, 0.25)],
             vibrato: Vibrato { rate: 5.0, depth: 0.005, delay: 0.4 },
-            gain: 0.81,
+            gain: 0.788,
             ..d()
         },
         "hum" => Recipe {
@@ -725,7 +865,7 @@ pub fn get(name: &str) -> Option<Recipe> {
                              env: (0.05, 0.3, 1.2), ..f() },
             body: vec![(280.0, 10.0, 0.5), (1100.0, 6.0, 0.12)],
             vibrato: Vibrato { rate: 4.8, depth: 0.004, delay: 0.4 },
-            gain: 0.74,
+            gain: 0.709,
             ..d()
         },
         "whisper" => Recipe {
@@ -823,7 +963,7 @@ pub fn get(name: &str) -> Option<Recipe> {
                              env: (0.03, 0.2, 1.2), ..f() },
             body: vec![(1500.0, 4.0, 0.15)],
             vibrato: Vibrato { rate: 4.6, depth: 0.003, delay: 0.4 },
-            gain: 0.293,
+            gain: 0.285,
             ..d()
         },
         "oboe" => Recipe {
@@ -834,7 +974,7 @@ pub fn get(name: &str) -> Option<Recipe> {
                              env: (0.02, 0.18, 1.3), ..f() },
             body: vec![(1400.0, 8.0, 0.4), (3000.0, 6.0, 0.2)],
             vibrato: Vibrato { rate: 5.4, depth: 0.005, delay: 0.25 },
-            gain: 0.62,
+            gain: 0.63,
             ..d()
         },
         "horn" => Recipe {
@@ -858,7 +998,7 @@ pub fn get(name: &str) -> Option<Recipe> {
             // 胴の山。バイオリンらしさはほぼここ
             body: vec![(280.0, 6.0, 0.35), (460.0, 7.0, 0.25), (700.0, 6.0, 0.18)],
             vibrato: Vibrato { rate: 5.8, depth: 0.007, delay: 0.25 },
-            gain: 0.737,
+            gain: 0.713,
             ..d()
         },
         "cello" => Recipe {
@@ -869,7 +1009,7 @@ pub fn get(name: &str) -> Option<Recipe> {
                              track: 0.5, env: (0.06, 0.35, 1.2), ..f() },
             body: vec![(100.0, 5.0, 0.4), (200.0, 6.0, 0.25), (400.0, 6.0, 0.15)],
             vibrato: Vibrato { rate: 5.0, depth: 0.006, delay: 0.3 },
-            gain: 0.92,
+            gain: 0.934,
             ..d()
         },
 
@@ -899,7 +1039,7 @@ pub fn get(name: &str) -> Option<Recipe> {
             attack: Attack { amount: 0.07, hp: 2500.0, a: 0.003, d: 0.02 },
             vibrato: Vibrato { rate: 6.0, depth: 0.006, delay: 0.2 },
             drive: 1.5,
-            gain: 0.34,
+            gain: 0.333,
             ..d()
         },
         _ => return None,
@@ -909,6 +1049,18 @@ pub fn get(name: &str) -> Option<Recipe> {
 
 /// ここで足した楽器の名前。
 pub const NAMES: &[&str] = &[
+    "kotostring",
+    "shamisenstring",
+    "biwa",
+    "sanshin",
+    "kokyu",
+    "sho",
+    "hichiriki",
+    "koto12",
+    "charango",
+    "kora",
+    "steeldrum",
+    "sitarstring",
     "warmpad",
     "glasspad",
     "choirpad",

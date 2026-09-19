@@ -1,6 +1,6 @@
 # Tonescript
 
-A DAW whose project file is text. 69 instruments, zero samples. Free, MIT.
+A DAW whose project file is text. 135 instruments, zero samples. Free, MIT.
 
 Piano roll with a velocity lane, mixer with meters, automation, undo,
 autosave, MIDI files in and out.
@@ -49,7 +49,7 @@ tone patches  [song]    list instruments (plus the song's own)
 ## What's inside
 
 ```
-crates/dsp/      oscillators, envelopes, filters, 69 instruments, 11 drums, reverb
+crates/dsp/      oscillators, envelopes, filters, 135 instruments, 11 drums, reverb
                  and the recipe format for instruments you write yourself
 crates/song/     song files (Rhai), time signatures, automation
 crates/render/   arrangement, synthesis, mixing, mastering, WAV
@@ -127,7 +127,7 @@ make with it, nor any samples or voice banks you supply.
 
 # Tonescript（日本語）
 
-プロジェクトファイルがテキストの DAW。楽器69種、音源ゼロ。無料・MIT。
+プロジェクトファイルがテキストの DAW。楽器135種、音源ゼロ。無料・MIT。
 
 ピアノロール（強さのレーン付き）、針付きミキサー、オートメーション、
 取り消し、自動保存、MIDI の読み書き。
@@ -172,7 +172,7 @@ tone patches  [曲]      音色の一覧（曲が作った音色も）
 ## 何が入っているか
 
 ```
-crates/dsp/      発振器・エンベロープ・フィルタ・69音色・11ドラム・残響
+crates/dsp/      発振器・エンベロープ・フィルタ・135音色・11ドラム・残響
                  自分で音色を作るための書式
 crates/song/     曲ファイル（Rhai）、拍子、オートメーション
 crates/render/   編曲・合成・ミックス・マスタリング・WAV

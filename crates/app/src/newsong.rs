@@ -230,7 +230,7 @@ pub fn build(spec: &Spec) -> String {
     let _ = writeln!(s);
 
     // --- 音色とミックス
-    let _ = writeln!(s, "// patch は音色名。69 種類ある（tone patches で一覧）。自分で作ることもできる。");
+    let _ = writeln!(s, "// patch は音色名。135 種類ある（tone patches で一覧）。自分で作ることもできる。");
     let _ = writeln!(s, "let VOICES = #{{");
     let _ = writeln!(s, "    lead:   #{{ ch: 0,  patch: \"supersaw\", program: 81,  volume: 100,");
     let _ = writeln!(s, "               label: \"主旋律\",     color: \"#ff9f43\" }},");
@@ -471,7 +471,7 @@ mod tests {
         // 中身がコメント付きで読めること。数字の羅列だけにしない
         let text = build(&Spec::default());
         assert!(text.contains("// 音符は画面で描く"));
-        assert!(text.contains("69 種類ある"));
+        assert!(text.contains("135 種類ある"));
         assert!(text.contains("低音を広げると芯がぼやける"));
         // 行が極端に長くないこと
         for (i, l) in text.lines().enumerate() {

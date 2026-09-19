@@ -462,13 +462,39 @@ fn every_patch_example_actually_makes_a_sound() {
 }
 
 #[test]
+fn the_instrument_list_in_the_doc_matches_the_code() {
+    // §9 の表と実装がずれたら、渡した相手が「無い音色」を書いてしまう。
+    // **文書に並んでいる名前が、全部そのまま使えること。**
+    let doc = std::fs::read_to_string("../../SONGFILE.md").expect("SONGFILE.md が読めない");
+    let head = doc
+        .split("## 9.")
+        .nth(1)
+        .and_then(|s| s.split("## 10.").next())
+        .expect("§9 が見つからない");
+    let mut listed: Vec<String> = Vec::new();
+    for line in head.lines().filter(|l| l.starts_with('|')) {
+        for m in line.split('`').skip(1).step_by(2) {
+            if m.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()) {
+                listed.push(m.to_string());
+            }
+        }
+    }
+    assert!(listed.len() > 100, "拾えた名前が {} 個しかない", listed.len());
+    let all = tonescript_dsp::patch::all_names();
+    for n in &listed {
+        assert!(all.contains(&n.as_str()), "文書にある {n} が実装に無い");
+    }
+    // 逆も。実装にあるのに文書に無いと、誰にも見つけてもらえない
+    for n in &all {
+        assert!(listed.iter().any(|l| l == n), "実装の {n} が文書に無い");
+    }
+    assert_eq!(listed.len(), all.len(), "数が合わない");
+}
+
+#[test]
 fn the_ordinary_instruments_are_usable_by_name() {
-    // §9 に並べた23種が、名前を書くだけで鳴ること
-    for name in [
-        "guitar", "nylon", "eguitar", "distguitar", "ebass", "ukulele", "banjo", "mandolin",
-        "harp", "pizzicato", "rhodes", "clav", "vibraphone", "glocken", "trumpet", "sax",
-        "clarinet", "oboe", "horn", "violin", "cello", "accordion", "harmonica",
-    ] {
+    // 名前を書くだけで鳴ること
+    for name in tonescript_dsp::kit::NAMES {
         let src = format!(
             r#"let BPM = 120;
                let SECTIONS = [["A", 1, "p", "k", "m", 1.0]];
@@ -477,7 +503,7 @@ fn the_ordinary_instruments_are_usable_by_name() {
                let ARRANGE = #{{ "1": ["lead"] }};"#
         );
         let s = load(&src);
-        assert_eq!(s.voices["lead"].patch.as_deref(), Some(name));
+        assert_eq!(s.voices["lead"].patch.as_deref(), Some(*name));
         // 名前が引けて、本当に音になること
         let w = tonescript_dsp::patch::render(
             name,

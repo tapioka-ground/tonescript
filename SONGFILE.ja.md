@@ -556,7 +556,7 @@ let SCALE_ROOT = 9;                    // A のピッチクラス（C=0, A=9）
 
 ---
 
-## 9. 使える音色 69 種
+## 9. 使える音色 135 種
 
 `tone patches` で一覧が出る。2種類あるが、使い方は同じで `VOICES` に名前を
 書くだけ。
@@ -574,16 +574,24 @@ let SCALE_ROOT = 9;                    // A のピッチクラス（C=0, A=9）
 | 撥弦 | `sitar` `oud` |
 
 
-**基本の楽器（23種）** — 作り方を数で書いたもの（§10）。曲ファイルへ写して
+**基本の楽器（89種）** — 作り方を数で書いたもの（§10）。曲ファイルへ写して
 直せる。
 
 | 系統 | 名前 |
 |---|---|
-| 撥弦 | `guitar` `nylon` `eguitar` `distguitar` `ebass` `ukulele` `banjo` `mandolin` `harp` `pizzicato` |
-| 鍵盤・金属 | `rhodes` `clav` `vibraphone` `glocken` |
-| 管 | `trumpet` `sax` `clarinet` `oboe` `horn` |
-| 弓 | `violin` `cello` |
-| リード | `accordion` `harmonica` |
+| 撥弦 | `guitar` `nylon` `eguitar` `distguitar` `twelvestring` `ukulele` `banjo` `mandolin` `balalaika` `bouzouki` `charango` `harp` `kora` `dulcimer` `pizzicato` |
+| ベース | `ebass` `slapbass` `fretless` |
+| 弓 | `violin` `viola` `cello` `contrabass` `tremolostrings` `kokyu` |
+| 和楽器 | `kotostring` `shamisenstring` `biwa` `sanshin` `koto12` `sho` `hichiriki` |
+| アジア | `guzheng` `pipa` `sitarstring` |
+| 鍵盤 | `rhodes` `wurli` `clav` `celesta` `musicbox` `toypiano` `harmonium` `leslie` `melodica` `accordion` `harmonica` |
+| 音程のある打 | `vibraphone` `glocken` `xylophone` `tubularbell` `handpan` `steeldrum` `logdrum` `woodblock` `timpani` `taiko` |
+| 金管 | `trumpet` `mutetrumpet` `trombone` `horn` `tuba` |
+| 木管 | `sax` `clarinet` `oboe` `bassoon` `piccolo` `recorder` `bagpipe` |
+| 声 | `aah` `ooh` `hum` `whisper` |
+| パッド | `warmpad` `glasspad` `choirpad` `sweeppad` `stringmachine` `bellpad` |
+| シンセ | `plucksynth` `bellsynth` `pwmlead` `hoover` `organbass` `clickbass` |
+| チップチューン | `nespulse` `nesthin` `neslead` `nestri` `nesarp` `gameboy` |
 
 **どこまで本物に近いか、正直に。** 撥弦は弦そのものを真似ている（波が弦を
 往復し、端で折り返すたびに高い音から失われる）ので、単体で聞いても持つ。

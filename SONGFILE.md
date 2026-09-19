@@ -553,7 +553,7 @@ let SCALE_ROOT = 9;                    // A (C=0, A=9)
 
 ---
 
-## 9. The 69 instruments
+## 9. The 135 instruments
 
 `tone patches` prints them. They come in two kinds, and both are used the
 same way — just a name in `VOICES`.
@@ -571,16 +571,24 @@ same way — just a name in `VOICES`.
 | Plucked | `sitar` `oud` |
 
 
-**Ordinary instruments (23)** — written as recipes (§10), so you can copy
+**Ordinary instruments (89)** — written as recipes (§10), so you can copy
 one into your song file and change it.
 
 | Family | Names |
 |---|---|
-| Plucked strings | `guitar` `nylon` `eguitar` `distguitar` `ebass` `ukulele` `banjo` `mandolin` `harp` `pizzicato` |
-| Keys, tuned metal | `rhodes` `clav` `vibraphone` `glocken` |
-| Winds | `trumpet` `sax` `clarinet` `oboe` `horn` |
-| Bowed | `violin` `cello` |
-| Reeds | `accordion` `harmonica` |
+| Plucked strings | `guitar` `nylon` `eguitar` `distguitar` `twelvestring` `ukulele` `banjo` `mandolin` `balalaika` `bouzouki` `charango` `harp` `kora` `dulcimer` `pizzicato` |
+| Bass | `ebass` `slapbass` `fretless` |
+| Bowed | `violin` `viola` `cello` `contrabass` `tremolostrings` `kokyu` |
+| Japanese | `kotostring` `shamisenstring` `biwa` `sanshin` `koto12` `sho` `hichiriki` |
+| Asian | `guzheng` `pipa` `sitarstring` |
+| Keys | `rhodes` `wurli` `clav` `celesta` `musicbox` `toypiano` `harmonium` `leslie` `melodica` `accordion` `harmonica` |
+| Tuned percussion | `vibraphone` `glocken` `xylophone` `tubularbell` `handpan` `steeldrum` `logdrum` `woodblock` `timpani` `taiko` |
+| Brass | `trumpet` `mutetrumpet` `trombone` `horn` `tuba` |
+| Woodwind | `sax` `clarinet` `oboe` `bassoon` `piccolo` `recorder` `bagpipe` |
+| Voice | `aah` `ooh` `hum` `whisper` |
+| Pads | `warmpad` `glasspad` `choirpad` `sweeppad` `stringmachine` `bellpad` |
+| Synth | `plucksynth` `bellsynth` `pwmlead` `hoover` `organbass` `clickbass` |
+| Chiptune | `nespulse` `nesthin` `neslead` `nestri` `nesarp` `gameboy` |
 
 **How close they get, honestly.** The plucked strings model the actual
 string — a wave running up and down it, losing its highs at each end — so
