@@ -23,7 +23,9 @@
 //! 生ドラム・生ピアノ・オーケストラは**そもそも作れない**。録ったものを
 //! 使うしかない領域で、音源ライブラリが何十GBある理由でもある。
 
-use crate::recipe::{Attack, Env, Filter, FilterKind, Fm, Osc, Recipe, Vibrato, Wave};
+use crate::recipe::{
+    Attack, Env, Filter, FilterKind, Fm, Osc, Recipe, Tremolo, Vibrato, Wave,
+};
 #[cfg(test)]
 use crate::recipe;
 
@@ -132,6 +134,229 @@ pub fn get(name: &str) -> Option<Recipe> {
             body: vec![(300.0, 5.0, 0.3), (700.0, 6.0, 0.15)],
             gain: 1.0,
             ring: 0.35,
+            ..d()
+        },
+
+
+        // ---- 管の残り
+        "trombone" => Recipe {
+            // トロンボーン。管が太く長いので、ホルンより暗くて重い
+            osc: vec![Osc { wave: Wave::Saw, ..o() }],
+            env: Env { a: 0.05, d: 0.15, s: 0.86, r: 0.12 },
+            filter: Filter { kind: FilterKind::Ladder, base: 420.0, sweep: 2600.0, res: 0.2,
+                             vel: 1600.0, env: (0.045, 0.25, 1.5), ..f() },
+            body: vec![(520.0, 3.5, 0.22)],
+            vibrato: Vibrato { rate: 5.0, depth: 0.003, delay: 0.4 },
+            drive: 1.6,
+            gain: 0.55,
+            ..d()
+        },
+        "tuba" => Recipe {
+            // チューバ。いちばん下を支える
+            osc: vec![Osc { wave: Wave::Saw, ..o() }],
+            env: Env { a: 0.06, d: 0.2, s: 0.88, r: 0.16 },
+            filter: Filter { kind: FilterKind::Ladder, base: 260.0, sweep: 900.0, res: 0.16,
+                             vel: 600.0, env: (0.055, 0.3, 1.4), ..f() },
+            body: vec![(160.0, 4.0, 0.35)],
+            drive: 1.4,
+            gain: 0.7,
+            ..d()
+        },
+        "mutetrumpet" => Recipe {
+            // ミュートを差したトランペット。鼻に掛かって細くなる
+            osc: vec![Osc { wave: Wave::Saw, ..o() }],
+            env: Env { a: 0.025, d: 0.1, s: 0.82, r: 0.08 },
+            filter: Filter { kind: FilterKind::Bandpass, base: 1600.0, res: 0.5, ..f() },
+            body: vec![(1200.0, 9.0, 0.5), (2600.0, 7.0, 0.3)],
+            vibrato: Vibrato { rate: 5.6, depth: 0.004, delay: 0.3 },
+            drive: 2.0,
+            gain: 0.85,
+            ..d()
+        },
+        "bassoon" => Recipe {
+            // ファゴット。低い木管。倍音が独特で、低いのに埋もれない
+            osc: vec![Osc { wave: Wave::Saw, mix: 0.7, ..o() },
+                      Osc { wave: Wave::Pulse, mix: 0.3, width: 0.3, ..o() }],
+            env: Env { a: 0.03, d: 0.12, s: 0.85, r: 0.1 },
+            filter: Filter { kind: FilterKind::Ladder, base: 500.0, sweep: 1200.0, res: 0.28,
+                             env: (0.025, 0.2, 1.4), ..f() },
+            body: vec![(440.0, 7.0, 0.35), (1200.0, 5.0, 0.2)],
+            vibrato: Vibrato { rate: 4.8, depth: 0.004, delay: 0.35 },
+            gain: 0.55,
+            ..d()
+        },
+        "piccolo" => Recipe {
+            // ピッコロ。フルートの1オクターブ上。息の音が目立つ
+            osc: vec![Osc { wave: Wave::Sine, mix: 0.7, ..o() },
+                      Osc { wave: Wave::Noise, mix: 0.3, ..o() }],
+            env: Env { a: 0.02, d: 0.08, s: 0.88, r: 0.07 },
+            filter: Filter { kind: FilterKind::Bandpass, base: 2600.0, res: 0.4, track: 0.8, ..f() },
+            vibrato: Vibrato { rate: 5.8, depth: 0.006, delay: 0.2 },
+            gain: 1.3,
+            ..d()
+        },
+        "recorder" => Recipe {
+            // リコーダー。息が素直に管へ入るので、倍音が少なくて澄む
+            osc: vec![Osc { wave: Wave::Sine, mix: 0.85, ..o() },
+                      Osc { wave: Wave::Noise, mix: 0.15, ..o() }],
+            env: Env { a: 0.025, d: 0.06, s: 0.9, r: 0.06 },
+            filter: Filter { kind: FilterKind::Bandpass, base: 1400.0, res: 0.3, track: 0.7, ..f() },
+            gain: 1.2,
+            ..d()
+        },
+        "melodica" => Recipe {
+            // 鍵盤ハーモニカ。金属の舌なので、アコーディオンに近い
+            osc: vec![Osc { wave: Wave::Pulse, mix: 0.7, width: 0.35, ..o() },
+                      Osc { wave: Wave::Saw, mix: 0.3, detune: 5.0, ..o() }],
+            env: Env { a: 0.015, d: 0.07, s: 0.88, r: 0.07 },
+            filter: Filter { kind: FilterKind::Ladder, base: 1600.0, sweep: 900.0, res: 0.2,
+                             env: (0.012, 0.12, 1.4), ..f() },
+            body: vec![(1000.0, 4.0, 0.2)],
+            gain: 0.5,
+            ..d()
+        },
+        "bagpipe" => Recipe {
+            // バグパイプ。鳴りっぱなしで、倍音がぎっしり
+            osc: vec![Osc { wave: Wave::Saw, mix: 1.0, detune: -8.0, ..o() },
+                      Osc { wave: Wave::Saw, mix: 1.0, detune: 8.0, ..o() },
+                      Osc { wave: Wave::Pulse, mix: 0.5, width: 0.25, octave: -1, ..o() }],
+            env: Env { a: 0.04, d: 0.05, s: 0.95, r: 0.06 },
+            filter: Filter { kind: FilterKind::Ladder, base: 2400.0, sweep: 0.0, res: 0.25, ..f() },
+            body: vec![(900.0, 6.0, 0.3), (2000.0, 5.0, 0.2)],
+            drive: 1.6,
+            gain: 0.35,
+            ..d()
+        },
+
+        // ---- 弦の残り
+        "viola" => Recipe {
+            // ビオラ。バイオリンより5度低く、胴が相対的に小さいので鼻に掛かる
+            osc: vec![Osc { wave: Wave::Saw, mix: 1.0, detune: -3.0, ..o() },
+                      Osc { wave: Wave::Saw, mix: 1.0, detune: 3.0, ..o() }],
+            env: Env { a: 0.065, d: 0.16, s: 0.88, r: 0.2 },
+            filter: Filter { kind: FilterKind::Ladder, base: 850.0, sweep: 2200.0, res: 0.2,
+                             track: 0.5, env: (0.055, 0.32, 1.2), ..f() },
+            body: vec![(220.0, 6.0, 0.35), (350.0, 7.0, 0.25), (600.0, 6.0, 0.15)],
+            vibrato: Vibrato { rate: 5.4, depth: 0.007, delay: 0.28 },
+            gain: 0.5,
+            ..d()
+        },
+        "contrabass" => Recipe {
+            // コントラバス（弓）。オーケストラのいちばん下
+            osc: vec![Osc { wave: Wave::Saw, mix: 1.0, detune: -2.0, ..o() },
+                      Osc { wave: Wave::Saw, mix: 1.0, detune: 2.0, ..o() }],
+            env: Env { a: 0.08, d: 0.2, s: 0.88, r: 0.25 },
+            filter: Filter { kind: FilterKind::Ladder, base: 380.0, sweep: 1100.0, res: 0.18,
+                             track: 0.4, env: (0.07, 0.4, 1.2), ..f() },
+            body: vec![(60.0, 5.0, 0.45), (130.0, 6.0, 0.25)],
+            vibrato: Vibrato { rate: 4.4, depth: 0.005, delay: 0.35 },
+            gain: 0.6,
+            ..d()
+        },
+        "tremolostrings" => Recipe {
+            // 弓を細かく往復させる奏法。緊張した場面の定番
+            osc: vec![Osc { wave: Wave::Saw, mix: 1.0, detune: -4.0, ..o() },
+                      Osc { wave: Wave::Saw, mix: 1.0, detune: 4.0, ..o() }],
+            env: Env { a: 0.04, d: 0.12, s: 0.9, r: 0.2 },
+            filter: Filter { kind: FilterKind::Ladder, base: 900.0, sweep: 2200.0, res: 0.2,
+                             track: 0.5, env: (0.03, 0.3, 1.2), ..f() },
+            body: vec![(280.0, 6.0, 0.3), (460.0, 7.0, 0.2)],
+            // 弓の往復そのもの。毎秒14回くらい
+            tremolo: Tremolo { rate: 14.0, depth: 0.55 },
+            gain: 0.5,
+            ..d()
+        },
+        "slapbass" => Recipe {
+            // 弦を叩いて指板に当てる。頭がバチッと鳴る
+            osc: vec![Osc { wave: Wave::String, decay: 1.4, bright: 0.85, pick: 0.06, ..o() }],
+            env: Env { a: 0.0005, d: 1.2, s: 1.0, r: 0.08 },
+            filter: Filter { kind: FilterKind::Ladder, base: 500.0, sweep: 6000.0, res: 0.45,
+                             vel: 2500.0, env: (0.0005, 0.05, 3.5), ..f() },
+            body: vec![(80.0, 4.0, 0.45), (900.0, 5.0, 0.2)],
+            attack: Attack { amount: 0.25, hp: 2500.0, a: 0.0002, d: 0.005 },
+            drive: 2.2,
+            gain: 0.7,
+            ring: 0.6,
+            ..d()
+        },
+        "fretless" => Recipe {
+            // フレットレスベース。フレットが無いぶん丸く、唸りが出る
+            osc: vec![Osc { wave: Wave::String, decay: 3.0, bright: 0.38, pick: 0.30, ..o() }],
+            env: Env { a: 0.004, d: 2.6, s: 1.0, r: 0.14 },
+            filter: Filter { kind: FilterKind::Ladder, base: 900.0, sweep: 0.0, res: 0.2, ..f() },
+            body: vec![(75.0, 4.0, 0.5), (260.0, 5.0, 0.18)],
+            vibrato: Vibrato { rate: 4.5, depth: 0.004, delay: 0.25 },
+            gain: 1.0,
+            ring: 1.0,
+            ..d()
+        },
+        "twelvestring" => Recipe {
+            // 12弦ギター。6組が1オクターブずれて張ってある
+            osc: vec![
+                Osc { wave: Wave::String, decay: 3.0, bright: 0.60, pick: 0.20, detune: -5.0, ..o() },
+                Osc { wave: Wave::String, decay: 3.0, bright: 0.60, pick: 0.20, detune: 5.0, ..o() },
+                Osc { wave: Wave::String, mix: 0.55, decay: 2.2, bright: 0.72, pick: 0.18,
+                      octave: 1, ..o() },
+            ],
+            env: Env { a: 0.001, d: 3.0, s: 1.0, r: 0.12 },
+            body: vec![(100.0, 6.0, 0.45), (205.0, 8.0, 0.25)],
+            attack: Attack { amount: 0.07, hp: 3000.0, a: 0.0002, d: 0.004 },
+            gain: 0.75,
+            ring: 1.6,
+            ..d()
+        },
+        "balalaika" => Recipe {
+            // 三角の胴。短くて硬い
+            osc: vec![Osc { wave: Wave::String, decay: 0.8, bright: 0.78, pick: 0.14, ..o() }],
+            env: Env { a: 0.0008, d: 0.8, s: 1.0, r: 0.06 },
+            body: vec![(330.0, 7.0, 0.4), (780.0, 8.0, 0.2)],
+            gain: 0.85,
+            ring: 0.45,
+            ..d()
+        },
+        "bouzouki" => Recipe {
+            // ブズーキ。2本1組で、金属的に伸びる
+            osc: vec![
+                Osc { wave: Wave::String, decay: 2.2, bright: 0.80, pick: 0.15, detune: -5.0, ..o() },
+                Osc { wave: Wave::String, decay: 2.2, bright: 0.80, pick: 0.15, detune: 5.0, ..o() },
+            ],
+            env: Env { a: 0.0008, d: 2.0, s: 1.0, r: 0.08 },
+            body: vec![(200.0, 6.0, 0.35), (520.0, 7.0, 0.2)],
+            gain: 0.75,
+            ring: 1.0,
+            ..d()
+        },
+        "guzheng" => Recipe {
+            // 古筝。琴より大きく、伸びる
+            osc: vec![Osc { wave: Wave::String, decay: 3.8, bright: 0.55, pick: 0.22, ..o() }],
+            env: Env { a: 0.001, d: 3.4, s: 1.0, r: 0.2 },
+            body: vec![(180.0, 5.0, 0.35), (420.0, 6.0, 0.18)],
+            vibrato: Vibrato { rate: 5.5, depth: 0.010, delay: 0.35 },
+            gain: 0.9,
+            ring: 1.8,
+            ..d()
+        },
+        "pipa" => Recipe {
+            // 琵琶。爪で弾くので頭が鋭い
+            osc: vec![Osc { wave: Wave::String, decay: 1.6, bright: 0.80, pick: 0.10, ..o() }],
+            env: Env { a: 0.0006, d: 1.5, s: 1.0, r: 0.07 },
+            body: vec![(260.0, 7.0, 0.35), (700.0, 8.0, 0.2)],
+            attack: Attack { amount: 0.14, hp: 3000.0, a: 0.0002, d: 0.004 },
+            gain: 0.8,
+            ring: 0.8,
+            ..d()
+        },
+        "dulcimer" => Recipe {
+            // ダルシマー。ハンマーで叩く弦
+            osc: vec![
+                Osc { wave: Wave::String, decay: 2.6, bright: 0.68, pick: 0.12, detune: -4.0, ..o() },
+                Osc { wave: Wave::String, decay: 2.6, bright: 0.68, pick: 0.12, detune: 4.0, ..o() },
+            ],
+            env: Env { a: 0.0006, d: 2.4, s: 1.0, r: 0.12 },
+            body: vec![(220.0, 6.0, 0.35), (560.0, 7.0, 0.2)],
+            attack: Attack { amount: 0.10, hp: 2800.0, a: 0.0002, d: 0.005 },
+            gain: 0.8,
+            ring: 1.3,
             ..d()
         },
 
@@ -299,6 +524,25 @@ pub fn get(name: &str) -> Option<Recipe> {
 
 /// ここで足した楽器の名前。
 pub const NAMES: &[&str] = &[
+    "trombone",
+    "tuba",
+    "mutetrumpet",
+    "bassoon",
+    "piccolo",
+    "recorder",
+    "melodica",
+    "bagpipe",
+    "viola",
+    "contrabass",
+    "tremolostrings",
+    "slapbass",
+    "fretless",
+    "twelvestring",
+    "balalaika",
+    "bouzouki",
+    "guzheng",
+    "pipa",
+    "dulcimer",
     "guitar",
     "nylon",
     "eguitar",
