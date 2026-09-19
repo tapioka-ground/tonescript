@@ -61,10 +61,12 @@ pub fn harmonics(freq: f32) -> u32 {
 #[inline(always)]
 fn lookup(tbl: &[f32], phase: f32) -> f32 {
     let x = phase * TABLE as f32;
-    let i = x as usize;
-    let frac = x - i as f32;
-    // phase は呼ぶ側で 0〜1 に収めてある。i は最大 TABLE-1、
-    // tbl は TABLE+1 点あるので i+1 は必ず読める。
+    // **ここで必ず収める。** 呼ぶ側は 0〜1 に収めているつもりでも、
+    // f64 で積んだ位相を f32 へ落とすときに 0.99999999... が 1.0 へ
+    // 丸まることがある。そうなると i が TABLE になり、i+1 が範囲外を指す。
+    // 長く鳴らすほど当たりやすく、短い試験では出ない
+    let i = (x as usize).min(TABLE as usize - 1);
+    let frac = (x - i as f32).clamp(0.0, 1.0);
     let a = tbl[i];
     let b = tbl[i + 1];
     a + (b - a) * frac
@@ -193,6 +195,20 @@ mod tests {
     /// 上に居る割合。パルス幅がそのまま出るはず。
     fn duty_of(x: &[f32]) -> f32 {
         x.iter().filter(|v| **v > 0.0).count() as f32 / x.len() as f32
+    }
+
+    #[test]
+    fn a_phase_that_rounds_to_one_does_not_read_past_the_table() {
+        // f64 で積んだ位相を f32 へ落とすと、1.0 ちょうどになることがある。
+        // そこで範囲外を読んで落ちていた
+        let tbl = saw_table(8);
+        let v = lookup(&tbl, 1.0);
+        assert!(v.is_finite(), "位相 1.0 で壊れた");
+        assert!(lookup(&tbl, 0.9999999).is_finite());
+        // 長く鳴らしても落ちないこと
+        let f = vec![261.63f32; 48_000 * 2];
+        let w = saw_var(&f, 0.0);
+        assert!(w.iter().all(|v| v.is_finite()));
     }
 
     #[test]

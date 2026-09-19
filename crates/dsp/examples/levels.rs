@@ -1,7 +1,23 @@
 //! 楽器ごとの音量を並べる。持ち替えたときに段差が出ないか見るため。
 use tonescript_dsp::{kit, recipe};
+/// **鳴っている区間**の実効値。
+///
+/// 決まった長さで測ると比べられない。木魚は 0.1 秒で消えるし、パッドは
+/// 0.8 秒かけて立ち上がる。頭で測るとパッドが不当に小さく、1秒で測ると
+/// 木魚が不当に小さい。ピークの 1割 を超えている区間だけを見る。
+fn active_rms(x: &[f32]) -> f32 {
+    let peak = x.iter().fold(0.0f32, |a, b| a.max(b.abs()));
+    if peak <= 1e-9 {
+        return 0.0;
+    }
+    let live = peak * 0.1;
+    let from = x.iter().position(|v| v.abs() > live).unwrap_or(0);
+    let to = x.iter().rposition(|v| v.abs() > live).unwrap_or(x.len() - 1);
+    let seg = &x[from..=to.max(from)];
+    (seg.iter().map(|v| v * v).sum::<f32>() / seg.len() as f32).sqrt()
+}
+
 fn main() {
-    let win = 48_000 * 2 / 10; // 頭の 0.2 秒。撥弦も伸ばす音も、まだ鳴っている
     let which = std::env::args().nth(1).unwrap_or_else(|| "kit".into());
     let names: Vec<&str> = if which == "builtin" {
         tonescript_dsp::patch::NAMES.to_vec()
@@ -19,8 +35,7 @@ fn main() {
             // 実効値は真ん中の高さで。**ピークは低い音でいちばん大きくなる**
             // ことがあるので、低い音から高い音まで見る
             let mid = one(261.63);
-            let head = &mid[..win.min(mid.len())];
-            let rms = (head.iter().map(|x| x * x).sum::<f32>() / head.len() as f32).sqrt();
+            let rms = active_rms(&mid);
             let peak = [82.41f32, 261.63, 880.0]
                 .iter()
                 .map(|hz| one(*hz).iter().fold(0.0f32, |a, b| a.max(b.abs())))
