@@ -44,6 +44,8 @@ pub struct Osc {
     pub bright: f32,
     /// `string` のとき: 弾く位置 0〜1（0.5 で真ん中、端ほど硬い）
     pub pick: f32,
+    /// `pulse` のとき: 上に居る割合 0〜1。0.5 で矩形波、細いほど鼻に掛かる
+    pub width: f32,
 }
 
 impl Default for Osc {
@@ -56,6 +58,7 @@ impl Default for Osc {
             decay: 2.0,
             bright: 0.5,
             pick: 0.25,
+            width: 0.5,
         }
     }
 }
@@ -71,6 +74,9 @@ pub enum Wave {
     /// 撥いた弦。波形ではなく弦そのものを真似る（[`crate::string`]）。
     /// ギター・ベース・琴・ハープはこれでないと弦に聞こえない
     String,
+    /// 幅を選べる矩形波。**ファミコンの音がこれ。**
+    /// `width` で 12.5% / 25% / 50% を切り替える
+    Pulse,
 }
 
 impl Wave {
@@ -81,11 +87,13 @@ impl Wave {
             "sine" => Wave::Sine,
             "noise" => Wave::Noise,
             "string" => Wave::String,
+            "pulse" => Wave::Pulse,
             _ => return None,
         })
     }
 
-    pub const NAMES: [&'static str; 5] = ["saw", "square", "sine", "noise", "string"];
+    pub const NAMES: [&'static str; 6] =
+        ["saw", "square", "sine", "noise", "string", "pulse"];
 }
 
 /// 音量のかたち。
@@ -198,6 +206,18 @@ pub struct Fm {
     pub decay: f32,
 }
 
+/// 音量の揺れ。ビブラフォンの回転や、オルガンの回るスピーカー。
+///
+/// [`Vibrato`] は**音程**を揺らすが、こちらは**音量**を揺らす。
+/// 別物なので両方持てる。
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct Tremolo {
+    /// 1秒に何回
+    pub rate: f32,
+    /// どれだけ 0〜1。1 で音量が 0 まで落ちる
+    pub depth: f32,
+}
+
 /// やまびこ。
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct Delay {
@@ -217,6 +237,7 @@ pub struct Recipe {
     pub filter: Filter,
     pub attack: Attack,
     pub vibrato: Vibrato,
+    pub tremolo: Tremolo,
     pub fm: Fm,
     pub delay: Delay,
     /// 胴鳴り `[中心の高さ, 鋭さ, 混ぜる量]`。
@@ -239,6 +260,7 @@ impl Default for Recipe {
             filter: Filter::default(),
             attack: Attack::default(),
             vibrato: Vibrato::default(),
+            tremolo: Tremolo::default(),
             fm: Fm::default(),
             delay: Delay::default(),
             body: Vec::new(),
@@ -273,6 +295,9 @@ pub fn check(r: &Recipe) -> Result<(), String> {
         }
         if !(-4..=4).contains(&o.octave) {
             return Err(format!("osc[{i}] の octave が {} です。±4 までに", o.octave));
+        }
+        if o.wave == Wave::Pulse && !(0.02..=0.98).contains(&o.width) {
+            return Err(format!("osc[{i}] の width が {} です。0.02〜0.98 の間に", o.width));
         }
         if o.wave == Wave::String {
             if !(0.02..=20.0).contains(&o.decay) {
@@ -319,6 +344,9 @@ pub fn check(r: &Recipe) -> Result<(), String> {
     }
     if r.fm.ratio < 0.0 || r.fm.ratio > 64.0 {
         return Err(format!("fm.ratio が {} です。0〜64 の間に", r.fm.ratio));
+    }
+    if !(0.0..=1.0).contains(&r.tremolo.depth) {
+        return Err(format!("tremolo.depth が {} です。0〜1 の間に", r.tremolo.depth));
     }
     if !(0.0..=1.0).contains(&r.delay.feedback) {
         return Err(format!("delay.feedback が {} です。0〜1 の間に", r.delay.feedback));
@@ -392,12 +420,14 @@ pub fn render(r: &Recipe, freq: f32, n: usize, vel: f32, seed: u64) -> Vec<f32> 
                 match o.wave {
                     Wave::Saw => osc::saw_var(&f, phase),
                     Wave::Square => osc::square_var(&f, phase),
+                    Wave::Pulse => osc::pulse_var(&f, phase, o.width),
                     Wave::Sine => shape::sine_sweep(&f, phase),
                     Wave::Noise | Wave::String => unreachable!(),
                 }
             }
             Wave::Saw => osc::saw(f0, n, phase),
             Wave::Square => osc::square(f0, n, phase),
+            Wave::Pulse => osc::pulse(f0, n, phase, o.width),
             Wave::Sine => shape::sine(f0, n, phase),
         };
         shape::add_scaled(&mut out, &wave, g);
@@ -412,6 +442,16 @@ pub fn render(r: &Recipe, freq: f32, n: usize, vel: f32, seed: u64) -> Vec<f32> 
     // 音量のかたち
     let e = &r.env;
     shape::mul_in_place(&mut out, &env::lead(n, e.a, e.d, e.s, e.r));
+
+    // 音量の揺れ
+    if r.tremolo.depth > 0.0 && r.tremolo.rate > 0.0 {
+        let d = r.tremolo.depth.clamp(0.0, 1.0);
+        for (i, v) in out.iter_mut().enumerate() {
+            let t = i as f32 / SR;
+            // 1 を中心に上下させる。深さ 1 で 0 まで落ちる
+            *v *= 1.0 - d * 0.5 * (1.0 - (std::f32::consts::TAU * r.tremolo.rate * t).cos());
+        }
+    }
 
     // フィルタ
     if r.filter.kind != FilterKind::None {

@@ -124,6 +124,37 @@ pub fn square(freq: f32, n: usize, phase0: f32) -> Vec<f32> {
     out
 }
 
+/// 幅を選べる矩形波（パルス波）。
+///
+/// 矩形波は「上と下が半々」だが、幅を変えると倍音の並びが変わって
+/// 音色そのものが変わる。**ファミコンの音がまさにこれ**で、12.5% と 25% と
+/// 50% を切り替えて使い分けていた。細いほど鼻に掛かった細い音になる。
+///
+/// `width` は**上に居る割合**。0.125 なら 12.5% の時間だけ上。
+///
+/// 作り方は矩形波と同じでノコギリ2本の差だが、ずらす量は `1 - width`。
+/// ここを `width` にすると上下が入れ替わり、12.5% を頼んで 87.5% が出る。
+pub fn pulse(freq: f32, n: usize, phase0: f32, width: f32) -> Vec<f32> {
+    let w = 1.0 - width.clamp(0.02, 0.98);
+    let tbl = saw_table(harmonics(freq));
+    let step = freq / SR;
+    let mut a = wrap(phase0);
+    let mut b = wrap(phase0 + w);
+    let mut out = vec![0.0f32; n];
+    for v in out.iter_mut() {
+        *v = lookup(&tbl, a) - lookup(&tbl, b);
+        a += step;
+        if a >= 1.0 {
+            a -= 1.0;
+        }
+        b += step;
+        if b >= 1.0 {
+            b -= 1.0;
+        }
+    }
+    out
+}
+
 /// 周波数が毎サンプル変わるノコギリ波。ビブラート用。
 ///
 /// Python 版は `cumsum` で位相を作っていた。f32 の累積は
@@ -144,14 +175,76 @@ pub fn saw_var(freq: &[f32], phase0: f32) -> Vec<f32> {
 }
 
 pub fn square_var(freq: &[f32], phase0: f32) -> Vec<f32> {
+    pulse_var(freq, phase0, 0.5)
+}
+
+/// 幅を選べるパルス波の、音程が動く版。
+pub fn pulse_var(freq: &[f32], phase0: f32, width: f32) -> Vec<f32> {
+    let w = 1.0 - width.clamp(0.02, 0.98);
     let a = saw_var(freq, phase0);
-    let b = saw_var(freq, phase0 + 0.5);
+    let b = saw_var(freq, phase0 + w);
     a.iter().zip(&b).map(|(x, y)| x - y).collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 上に居る割合。パルス幅がそのまま出るはず。
+    fn duty_of(x: &[f32]) -> f32 {
+        x.iter().filter(|v| **v > 0.0).count() as f32 / x.len() as f32
+    }
+
+    #[test]
+    fn a_pulse_has_the_width_it_was_given() {
+        for w in [0.125f32, 0.25, 0.5] {
+            let x = pulse(220.0, 24_000, 0.0, w);
+            let got = duty_of(&x);
+            assert!((got - w).abs() < 0.03, "幅 {w} を頼んで {got:.3}");
+        }
+    }
+
+    #[test]
+    fn a_half_pulse_is_the_square_wave() {
+        let a = pulse(220.0, 4800, 0.0, 0.5);
+        let b = square(220.0, 4800, 0.0);
+        assert_eq!(a, b, "幅 0.5 が矩形波と違う");
+    }
+
+    #[test]
+    fn a_narrow_pulse_is_thinner_but_still_sounds() {
+        let wide = pulse(220.0, 24_000, 0.0, 0.5);
+        let thin = pulse(220.0, 24_000, 0.0, 0.125);
+        let rms = |x: &[f32]| (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt();
+        assert!(rms(&thin) > 0.05, "細いパルスが無音");
+        // 細いほうが小さい（上に居る時間が短いので）
+        assert!(rms(&thin) < rms(&wide), "細くしたのに小さくならない");
+    }
+
+    #[test]
+    fn a_silly_width_is_pulled_back_not_broken() {
+        for w in [-1.0f32, 0.0, 1.0, 5.0] {
+            let x = pulse(220.0, 4800, 0.0, w);
+            assert!(x.iter().all(|v| v.is_finite()), "幅 {w} で壊れた");
+        }
+    }
+
+    #[test]
+    fn the_moving_version_matches_the_still_one() {
+        // 音程が動かないなら、動く版と同じものが出ること。
+        // ただし動く版は「先に位相を進めてから読む」ので1サンプル先に居る
+        //（Python 版の cumsum に合わせてある）
+        //
+        // 長く回すと少しずつ離れる。止め版は位相を f32 で、動く版は f64 で
+        // 積んでいるため（長い音で誤差が溜まらないようにした結果）。
+        // 頭のうちは同じ波であることを見る
+        let f = vec![220.0f32; 600];
+        let a = pulse_var(&f, 0.0, 0.25);
+        let b = pulse(220.0, 600, 0.0, 0.25);
+        let diff =
+            a[..599].iter().zip(&b[1..]).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max);
+        assert!(diff < 2e-3, "1サンプルずらしても合わない: {diff}");
+    }
 
     #[test]
     fn harmonics_matches_python() {

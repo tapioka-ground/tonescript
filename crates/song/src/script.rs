@@ -717,6 +717,8 @@ fn read_recipe(v: &Dynamic, name: &str) -> R<recipe::Recipe> {
                 decay: mnum(&om, "decay", dflt.decay)?,
                 bright: mnum(&om, "bright", dflt.bright)?,
                 pick: mnum(&om, "pick", dflt.pick)?,
+                // パルスのときだけ効く
+                width: mnum(&om, "width", dflt.width)?,
             });
         }
     }
@@ -804,6 +806,15 @@ fn read_recipe(v: &Dynamic, name: &str) -> R<recipe::Recipe> {
             rate: mnum(&vm, "rate", 5.0)?,
             depth: mnum(&vm, "depth", 0.0)?,
             delay: mnum(&vm, "delay", 0.0)?,
+        };
+    }
+
+    // 音量の揺れ
+    if let Some(v) = field(&m, "tremolo") {
+        let tm = map(v, &at("tremolo"))?;
+        r.tremolo = recipe::Tremolo {
+            rate: mnum(&tm, "rate", 5.0)?,
+            depth: mnum(&tm, "depth", 0.0)?,
         };
     }
 
