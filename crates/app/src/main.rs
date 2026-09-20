@@ -617,8 +617,7 @@ impl App {
         if self.taking_audio.is_some() {
             return;
         }
-        let from = self.sample_of(self.head);
-        let r = rec::Rec::start(which, from);
+        let r = rec::Rec::start(which);
         match (&r.error, r.is_open()) {
             (Some(e), _) => {
                 self.status = format!("[!] 録れません: {e}");

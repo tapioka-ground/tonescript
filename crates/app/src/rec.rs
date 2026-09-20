@@ -74,8 +74,6 @@ pub struct Rec {
     level: Arc<AtomicU32>,
     /// 何サンプル溜まったか
     len: Arc<AtomicUsize>,
-    /// 曲のどこから録り始めたか（サンプル）
-    pub from: u64,
     pub name: Option<String>,
     pub error: Option<String>,
     pub channels: u16,
@@ -90,8 +88,11 @@ impl Rec {
         list.filter_map(|d| d.name().ok()).collect()
     }
 
-    /// 録り始める。`from` は曲のどこからか（サンプル）。
-    pub fn start(which: Option<usize>, from: u64) -> Rec {
+    /// 録り始める。
+    ///
+    /// どこから録ったかはここでは持たない。書くのは歌ったぶんだけで、
+    /// 置き場所は `AUDIO_TRACKS` の `at` が持つ。
+    pub fn start(which: Option<usize>) -> Rec {
         let stop = Arc::new(AtomicBool::new(false));
         let level = Arc::new(AtomicU32::new(0));
         let len = Arc::new(AtomicUsize::new(0));
@@ -101,7 +102,6 @@ impl Rec {
             stop: stop.clone(),
             level: level.clone(),
             len: len.clone(),
-            from,
             name: None,
             error: None,
             channels: 1,
