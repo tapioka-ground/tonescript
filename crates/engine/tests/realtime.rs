@@ -549,6 +549,97 @@ fn the_metronome_never_reaches_the_file() {
 }
 
 #[test]
+fn seeking_does_not_stack_the_notes_on_top_of_each_other() {
+    // **頭出ししても音量が変わらないこと。**
+    //
+    // 古い代の音を捨てる合図を誰も送っていなかったので、頭出しのたびに
+    // 前の代がそのまま残り、同じ音符が二重に鳴って 6dB 大きくなっていた。
+    // しかも頭出しを繰り返すほど増えた
+    let _one = solo();
+    let (s, sc) = song();
+    let (mut e, mut m) = Engine::new();
+    e.set_song(s, sc);
+    let t0 = Instant::now();
+    while e.makeup() == 1.0 && t0.elapsed() < Duration::from_secs(20) {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    settle();
+
+    let mut take = |e: &mut Engine, m: &mut Mixer| -> f32 {
+        e.seek(0);
+        std::thread::sleep(Duration::from_millis(250));
+        e.play();
+        let (l, _) = pull(m, 25, 1024, Duration::from_millis(3));
+        e.stop();
+        rms(&l)
+    };
+    let first = take(&mut e, &mut m);
+    assert!(first > 0.0, "そもそも鳴っていない");
+    for round in 2..=4 {
+        let again = take(&mut e, &mut m);
+        let db = 20.0 * (again / first).log10();
+        assert!(
+            db.abs() < 1.0,
+            "{round} 回目の頭出しで {db:+.2}dB 変わった（{first:.5} -> {again:.5}）"
+        );
+    }
+}
+
+#[test]
+fn the_eq_changes_the_sound_while_it_plays() {
+    let _one = solo();
+    let (s, sc) = song();
+    let (mut e, mut m) = Engine::new();
+    e.set_song(s, sc);
+    // **裏の音圧測定が終わるまで待つ。** 途中で効き始めると、それだけで
+    // 全部が大きくなって、EQ の差と区別がつかなくなる（実際それで
+    // 「削ったのに大きくなった」という測定結果を出した）
+    let t0 = Instant::now();
+    while e.makeup() == 1.0 && t0.elapsed() < Duration::from_secs(20) {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    settle();
+
+    // 素のまま
+    e.play();
+    let (flat, _) = pull(&mut m, 30, 1024, Duration::from_millis(3));
+    e.stop();
+    e.seek(0);
+
+    // 高い所を大きく削る。**鳴らしたまま効くこと**
+    for p in ["lead", "bass", "drums", "perc"] {
+        e.set_eq(p, -0.0, 0.0, -24.0);
+    }
+    settle();
+    e.play();
+    let (dull, _) = pull(&mut m, 30, 1024, Duration::from_millis(3));
+
+    // **高い帯だけ取り出して測る。** 全体の実効値では、削った帯の
+    // 割合が小さいと差が埋もれる
+    //
+    // ハイパスは**4段重ねる**。1段（6dB/oct）では緩すぎて低い所が漏れ、
+    // 強い基音に埋もれて差が見えない（それで -0.8dB という読み違えをした）
+    let highs = |x: &[f32]| -> f32 {
+        let mut b = x.to_vec();
+        for _ in 0..4 {
+            b = tonescript_dsp::filter::highpass(&b, 6000.0);
+        }
+        rms(&b)
+    };
+    let (a, b) = (highs(&flat), highs(&dull));
+    let db = 20.0 * (b / a.max(1e-12)).log10();
+    assert!(db < -10.0, "6kHz から上が {db:+.1}dB しか減っていない（素 {a:.6} / 削り {b:.6}）");
+    // 低い所は残っていること。全体が下がっただけでは EQ ではない
+    let lows = |x: &[f32]| -> f32 {
+        let hp = tonescript_dsp::filter::highpass(x, 300.0);
+        let lo: Vec<f32> = x.iter().zip(&hp).map(|(v, h)| v - h).collect();
+        (lo.iter().map(|v| v * v).sum::<f32>() / lo.len() as f32).sqrt()
+    };
+    let low_db = 20.0 * (lows(&dull) / lows(&flat).max(1e-12)).log10();
+    assert!(low_db.abs() < 2.0, "低い所まで {low_db:+.1}dB 動いた");
+}
+
+#[test]
 fn the_meters_say_what_actually_came_out() {
     let _one = solo();
     let (s, sc) = song();

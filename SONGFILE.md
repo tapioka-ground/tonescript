@@ -480,8 +480,38 @@ let PREMIX_LUFS = -20.0;
 | `MIX` key | Meaning |
 |---|---|
 | `width` | stereo width. 0 is dead centre. **Widening the low end blurs it**, so keep `bass` and `sub` at 0 |
+| `eq` | three bands of tone shaping (below) | flat |
 | `reverb` | send amount. 0 sends nothing. 0.2–0.4 is a normal range |
 | `duck` | how much the sidechain pushes this part down on every kick |
+
+### `eq` — taking space away from one part to give it to another
+
+A mix is not built with volume alone. Bass and kick both live down low, so
+whatever you do to their faders they keep covering each other. **The fix is
+to cut one of them where the other needs room.**
+
+```rhai
+let MIX = #{
+    bass:  #{ eq: #{ low: 2.0, mid: -3.0 } },
+    drums: #{ eq: #{ low: -4.0, high: 3.0 } },
+};
+```
+
+| Key | Meaning | Default |
+|---|---|---|
+| `low` | dB applied below `low_hz`, −24 to 24 | 0 |
+| `mid` | dB applied around `mid_hz` | 0 |
+| `high` | dB applied above `high_hz` | 0 |
+| `low_hz` | where the low shelf turns | 200 |
+| `mid_hz` | centre of the mid bump | 1000 |
+| `mid_q` | how narrow the mid is, 0.2–12 | 0.9 |
+| `high_hz` | where the high shelf turns | 4000 |
+
+Three bands is enough. Full desks carry six or eight, but what actually
+gets used is "take the bottom off", "push or pull the middle", "add air".
+
+**Cutting beats boosting.** If a part is dull, first try cutting the middle
+of whatever is on top of it. Everything you boost also eats headroom.
 
 ### Using the reverb
 

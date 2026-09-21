@@ -127,6 +127,8 @@ pub struct Voice {
 pub struct MixCfg {
     /// 左右の広がり。0 = 完全中央
     pub width: f32,
+    /// 音の整え（低・中・高）
+    pub eq: tonescript_dsp::eq::EqCfg,
     /// 残響の送り量
     pub reverb: f32,
     /// サイドチェインの掛かり具合
@@ -135,7 +137,12 @@ pub struct MixCfg {
 
 impl Default for MixCfg {
     fn default() -> Self {
-        Self { width: 0.0, reverb: 0.0, duck: 0.0 }
+        Self {
+            width: 0.0,
+            eq: tonescript_dsp::eq::EqCfg::default(),
+            reverb: 0.0,
+            duck: 0.0,
+        }
     }
 }
 

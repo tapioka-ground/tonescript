@@ -320,6 +320,14 @@ pub fn mix_down_with(
         ));
 
         let cfg = song.mix.get(name).copied().unwrap_or_default();
+        // 音の整え。**鳴らす側と同じ所を通す**（[`tonescript_dsp::eq`]）
+        if !cfg.eq.is_flat() {
+            tonescript_dsp::eq::Eq::new(cfg.eq).process(buf);
+            progress(&format!(
+                "             EQ 低{:+.1} 中{:+.1} 高{:+.1} dB",
+                cfg.eq.low, cfg.eq.mid, cfg.eq.high
+            ));
+        }
         let gain = song.gains.get(name).copied().unwrap_or(1.0);
         let lanes = song.automation.get(name);
         let lane_of = |l: Lane| -> Option<Vec<f32>> {

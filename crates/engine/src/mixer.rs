@@ -227,6 +227,9 @@ pub struct Mixer {
     trim: Vec<Option<(f32, f32)>>,
     /// 外で録った音
     audio: std::sync::Arc<Vec<Track>>,
+    /// パートごとの音の整え。**状態を持つので使い回す**
+    /// （毎ブロック作り直すと中の値が消えてプツプツ鳴る）
+    eq: Vec<tonescript_dsp::eq::Eq>,
     /// いま鳴っている音の数（画面に出す）
     live: Arc<AtomicU64>,
     /// 針
@@ -266,6 +269,7 @@ impl Mixer {
             clock: 0,
             trim: Vec::new(),
             audio: std::sync::Arc::new(Vec::new()),
+            eq: vec![tonescript_dsp::eq::Eq::default(); MAX_PARTS],
             live,
             meters,
             loudness: crate::meter::Loudness::new(),
@@ -316,6 +320,9 @@ impl Mixer {
                     self.voices = keep;
                     self.duck.clear();
                     self.reverb.clear();
+                    for e in self.eq.iter_mut() {
+                        e.clear();
+                    }
                     self.cursor.reset();
                     self.have_prev = false;
                 }
@@ -366,6 +373,7 @@ impl Mixer {
             self.acc.resize_with(np, || vec![0.0; MAX_BLOCK]);
             self.lane_a.resize(np, Lanes::default());
             self.lane_b.resize(np, Lanes::default());
+            self.eq.resize(np, tonescript_dsp::eq::Eq::default());
         }
         for a in self.acc.iter_mut().take(np) {
             if a.len() < n {
@@ -460,6 +468,11 @@ impl Mixer {
             let wide = 1.0 / (1.0 + s * s).sqrt();
             let gain = part.gain;
             let mut loudest = 0.0f32;
+            // 音の整え。設定が変わったときだけ係数を作り直す
+            let flat = part.mix.eq.is_flat();
+            if !flat {
+                self.eq[pi].set(part.mix.eq);
+            }
             for i in 0..n {
                 let t = i as f32 / n as f32;
                 let g = a.gain + (b.gain - a.gain) * t;
@@ -478,6 +491,9 @@ impl Mixer {
                 }
                 if dk > 0.0 {
                     v *= 1.0 - (1.0 - self.duck.at(pos + i as u64)) * dk;
+                }
+                if !flat {
+                    v = self.eq[pi].run(v);
                 }
                 v *= g;
                 if rv > 0.0 {
@@ -771,6 +787,34 @@ mod tests {
         let (mut l, mut r) = (vec![0.0; 32], vec![0.0; 32]);
         m.fill(&mut l, &mut r);
         assert!((l[0] - 0.5).abs() < 1e-5, "足し合わせが {}", l[0]);
+    }
+
+    #[test]
+    fn the_eq_is_applied_to_the_part() {
+        // 白い雑音へ高域を大きく削る設定を当てる。減ること
+        let mut rng = tonescript_dsp::rng::Pcg64::new(1);
+        let noise: Vec<f32> = (0..4096).map(|_| rng.next_f64() as f32 * 2.0 - 1.0).collect();
+
+        let run = |eq: tonescript_dsp::eq::EqCfg| -> f32 {
+            let (mut m, tx, _gc, sh) = rig();
+            let mut p = (*plan_with(480_000, 1)).clone();
+            p.parts[0].mix.eq = eq;
+            tx.push(Msg::Plan(Arc::new(p))).unwrap();
+            let mut v = voice(0, 0, 0.0, 0);
+            v.buf = noise.clone();
+            tx.push(Msg::Voice(v)).unwrap();
+            sh.playing.store(true, Ordering::Relaxed);
+            let (mut l, mut r) = (vec![0.0; 4096], vec![0.0; 4096]);
+            m.fill(&mut l, &mut r);
+            (l.iter().map(|x| x * x).sum::<f32>() / l.len() as f32).sqrt()
+        };
+
+        let flat = run(Default::default());
+        let cut = run(tonescript_dsp::eq::EqCfg { high: -24.0, ..Default::default() });
+        let boost = run(tonescript_dsp::eq::EqCfg { high: 12.0, ..Default::default() });
+        assert!(flat > 0.0, "そもそも鳴っていない");
+        assert!(cut < flat * 0.8, "高域を削っても減らない（素 {flat:.4} / 削り {cut:.4}）");
+        assert!(boost > flat * 1.1, "高域を上げても増えない（素 {flat:.4} / 上げ {boost:.4}）");
     }
 
     #[test]

@@ -324,6 +324,17 @@ impl Engine {
         }
     }
 
+    /// パートの音の整え（低・中・高、dB）。鳴らしたまま効く。
+    pub fn set_eq(&mut self, part: &str, low: f32, mid: f32, high: f32) {
+        if let Some(i) = self.plan.part_of(part) {
+            self.tweak(|p| {
+                p.parts[i].mix.eq.low = low.clamp(-24.0, 24.0);
+                p.parts[i].mix.eq.mid = mid.clamp(-24.0, 24.0);
+                p.parts[i].mix.eq.high = high.clamp(-24.0, 24.0);
+            });
+        }
+    }
+
     /// 全体の音量。
     pub fn set_master_gain(&mut self, g: f32) {
         self.tweak(|p| p.master_gain = g.clamp(0.0, 4.0));

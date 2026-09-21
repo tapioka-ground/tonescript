@@ -2530,6 +2530,7 @@ dependencies = [
 name = "tonescript-project"
 version = "0.1.0"
 dependencies = [
+ "tonescript-dsp",
  "tonescript-song",
 ]
 

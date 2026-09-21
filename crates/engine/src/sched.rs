@@ -189,8 +189,13 @@ impl Sched {
     }
 
     /// 数え直す。頭出し・曲の差し替え・繰り返しの折り返しで呼ぶ。
+    ///
+    /// **音側へ「古い代を捨てろ」と伝えるのもここ。** 伝えないと、
+    /// 頭出ししたときに前の代の音が残ったまま、同じ音符をもう一度出すので、
+    /// 二重に鳴って 6dB 大きくなる。頭出しのたびに増えていく
     fn restart(&mut self) {
         self.gen = self.shared.gen.load(Ordering::Relaxed);
+        self.send(Msg::Flush(self.gen));
         let pos = self.shared.pos.load(Ordering::Relaxed);
         self.upto = pos;
         self.last_pos = pos;

@@ -15,6 +15,7 @@
 
 pub mod drum;
 pub mod env;
+pub mod eq;
 pub mod filter;
 pub mod osc;
 pub mod patch;

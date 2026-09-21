@@ -227,6 +227,15 @@ fn encode(p: &Project) -> Value {
         one.insert("width", m.width.into());
         one.insert("reverb", m.reverb.into());
         one.insert("duck", m.duck.into());
+        let mut e = Value::obj();
+        e.insert("low", m.eq.low.into());
+        e.insert("mid", m.eq.mid.into());
+        e.insert("high", m.eq.high.into());
+        e.insert("low_hz", m.eq.low_hz.into());
+        e.insert("mid_hz", m.eq.mid_hz.into());
+        e.insert("mid_q", m.eq.mid_q.into());
+        e.insert("high_hz", m.eq.high_hz.into());
+        one.insert("eq", e);
         mix.insert(part, one);
     }
     root.insert("mix", mix);
@@ -249,6 +258,24 @@ fn encode(p: &Project) -> Value {
     root.insert("muted", Value::Arr(p.muted.iter().map(|s| s.as_str().into()).collect()));
     root.insert("soloed", Value::Arr(p.soloed.iter().map(|s| s.as_str().into()).collect()));
     root
+}
+
+/// 保存した音の整えを読む。範囲外は引き戻す。
+fn read_eq(one: &Value) -> tonescript_dsp::eq::EqCfg {
+    let d = tonescript_dsp::eq::EqCfg::default();
+    let Some(e) = one.get("eq").and_then(|x| x.as_obj()) else { return d };
+    let num = |k: &str, lo: f32, hi: f32, dflt: f32| -> f32 {
+        e.get(k).and_then(|x| x.as_f64()).map(|v| (v as f32).clamp(lo, hi)).unwrap_or(dflt)
+    };
+    tonescript_dsp::eq::EqCfg {
+        low: num("low", -24.0, 24.0, 0.0),
+        mid: num("mid", -24.0, 24.0, 0.0),
+        high: num("high", -24.0, 24.0, 0.0),
+        low_hz: num("low_hz", 20.0, 18_000.0, d.low_hz),
+        mid_hz: num("mid_hz", 20.0, 18_000.0, d.mid_hz),
+        mid_q: num("mid_q", 0.2, 12.0, d.mid_q),
+        high_hz: num("high_hz", 20.0, 18_000.0, d.high_hz),
+    }
 }
 
 fn decode(v: &Value) -> Result<Project, String> {
@@ -328,6 +355,7 @@ fn decode(v: &Value) -> Result<Project, String> {
                 part.clone(),
                 MixCfg {
                     width: num("width", 0.0, 4.0, 0.0),
+                    eq: read_eq(one),
                     reverb: num("reverb", 0.0, 2.0, 0.0),
                     duck: num("duck", 0.0, 2.0, 0.0),
                 },
@@ -471,7 +499,7 @@ mod tests {
             HashMap::from([(Lane::Gain, Curve::new(vec![(0, 1.0), (32, 0.25)]))]),
         );
         p.gains.insert("bass".into(), 0.8);
-        p.mix.insert("lead".into(), MixCfg { width: 1.35, reverb: 0.26, duck: 0.55 });
+        p.mix.insert("lead".into(), MixCfg { width: 1.35, reverb: 0.26, duck: 0.55, ..Default::default() });
         p.takes.insert(
             "take1".into(),
             AudioTrack {
@@ -494,7 +522,7 @@ mod tests {
         let d = tmpdir("mix");
         let s = Store::new(&d, "example");
         let mut p = sample();
-        p.mix.insert("bass".into(), MixCfg { width: 0.0, reverb: 0.02, duck: 1.0 });
+        p.mix.insert("bass".into(), MixCfg { width: 0.0, reverb: 0.02, duck: 1.0, ..Default::default() });
         s.save(&p).unwrap();
         let back = s.load().unwrap().expect("あるはず");
         assert_eq!(back.mix.len(), 2);
@@ -543,7 +571,7 @@ mod tests {
         let d = tmpdir("mixbad");
         let s = Store::new(&d, "example");
         let mut p = Project::new("example");
-        p.mix.insert("lead".into(), MixCfg { width: 99.0, reverb: -5.0, duck: 50.0 });
+        p.mix.insert("lead".into(), MixCfg { width: 99.0, reverb: -5.0, duck: 50.0, ..Default::default() });
         s.save(&p).unwrap();
         let back = s.load().unwrap().unwrap();
         let m = back.mix["lead"];

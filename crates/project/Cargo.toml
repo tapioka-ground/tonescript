@@ -8,3 +8,4 @@ license.workspace = true
 
 [dependencies]
 tonescript-song = { path = "../song" }
+tonescript-dsp = { path = "../dsp" }

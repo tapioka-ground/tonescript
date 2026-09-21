@@ -557,6 +557,25 @@ fn build(scope: &Scope) -> R<Song> {
             s.gains.insert(k.to_string(), num(val, "GAINS の値")?);
         }
     }
+/// `MIX.<パート>.eq` を読む。書いていない所は素通し。
+fn read_eq(m: &Map, part: &str) -> R<tonescript_dsp::eq::EqCfg> {
+    let Some(v) = field(m, "eq") else { return Ok(Default::default()) };
+    let em = map(v, &format!("MIX.{part}.eq"))?;
+    let d = tonescript_dsp::eq::EqCfg::default();
+    let cfg = tonescript_dsp::eq::EqCfg {
+        low: mnum(&em, "low", d.low)?,
+        mid: mnum(&em, "mid", d.mid)?,
+        high: mnum(&em, "high", d.high)?,
+        low_hz: mnum(&em, "low_hz", d.low_hz)?,
+        mid_hz: mnum(&em, "mid_hz", d.mid_hz)?,
+        mid_q: mnum(&em, "mid_q", d.mid_q)?,
+        high_hz: mnum(&em, "high_hz", d.high_hz)?,
+    };
+    // 鳴らす前に確かめる。暴れる値はここで止める
+    cfg.check().map_err(|e| LoadError::Shape(format!("MIX.{part}: {e}")))?;
+    Ok(cfg)
+}
+
     if let Some(v) = get(scope, "MIX") {
         for (k, val) in map(&v, "MIX")?.iter() {
             let m = map(val, "MIX の中身")?;
@@ -564,6 +583,7 @@ fn build(scope: &Scope) -> R<Song> {
                 k.to_string(),
                 MixCfg {
                     width: field(&m, "width").map(|v| num(v, "width")).transpose()?.unwrap_or(0.0),
+                    eq: read_eq(&m, k)?,
                     reverb: field(&m, "reverb").map(|v| num(v, "reverb")).transpose()?.unwrap_or(0.0),
                     duck: field(&m, "duck").map(|v| num(v, "duck")).transpose()?.unwrap_or(0.0),
                 },

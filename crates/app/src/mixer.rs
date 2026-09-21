@@ -102,7 +102,7 @@ impl Needles {
 pub enum Edit {
     /// 音量を変えた
     Gain { part: String, gain: f32 },
-    /// 広がり・送り・凹みを変えた
+    /// 広がり・送り・凹み・音の整えを変えた
     Mix { part: String, mix: MixCfg },
     /// 黙らせる／戻す
     Mute(String),
@@ -264,6 +264,26 @@ fn strip(
         knob(ui, "幅", &mut mix.width, 4.0, "左右の広がり。0 で完全中央。低音は 0 のまま");
         knob(ui, "残", &mut mix.reverb, 2.0, "残響へ送る量。0 で送らない");
         knob(ui, "凹", &mut mix.duck, 2.0, "キックのたびに凹む量（サイドチェイン）");
+        // 音の整え。dB なので別の見た目にする
+        ui.add_space(2.0);
+        let mut db = |ui: &mut Ui, label: &str, v: &mut f32, tip: &str| {
+            ui.horizontal(|ui| {
+                ui.label(theme::dim(label));
+                let r = ui.add(
+                    egui::DragValue::new(v)
+                        .speed(0.1)
+                        .range(-24.0..=24.0)
+                        .fixed_decimals(1)
+                        .suffix("dB"),
+                );
+                if r.on_hover_text(tip).changed() {
+                    touched = true;
+                }
+            });
+        };
+        db(ui, "低", &mut mix.eq.low, "200Hz から下。ベースとキックがぶつかるときは、片方を削る");
+        db(ui, "中", &mut mix.eq.mid, "1kHz のあたり。削ると引っ込み、上げると前に出る");
+        db(ui, "高", &mut mix.eq.high, "4kHz から上。上げると明るく、削ると丸くなる");
         if touched {
             out.push(Edit::Mix { part: part.to_string(), mix });
         }

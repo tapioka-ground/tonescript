@@ -520,6 +520,45 @@ fn the_ordinary_instruments_are_usable_by_name() {
 }
 
 #[test]
+fn the_eq_example_loads_and_shapes() {
+    // §8 に載せた EQ の例。読めて、値がそのまま入ること
+    let s = load(
+        r#"let BPM = 120;
+           let SECTIONS = [["A", 1, "p", "k", "m", 1.0]];
+           let VOICES = #{ bass: #{ ch: 0, patch: "sub" } };
+           let MIX = #{
+               bass:  #{ eq: #{ low: 2.0, mid: -3.0 } },
+               drums: #{ eq: #{ low: -4.0, high: 3.0 } },
+           };"#,
+    );
+    assert_eq!(s.mix["bass"].eq.low, 2.0);
+    assert_eq!(s.mix["bass"].eq.mid, -3.0);
+    assert_eq!(s.mix["drums"].eq.high, 3.0);
+    // 書いていない所は素通し
+    assert_eq!(s.mix["bass"].eq.high, 0.0);
+    assert!(!s.mix["bass"].eq.is_flat());
+    assert!(s.mix.get("nosuch").is_none());
+}
+
+#[test]
+fn a_silly_eq_is_refused_with_a_reason() {
+    // 暴れる値は読み込みで止める
+    for bad in ["low: 40.0", "mid_q: 100.0", "mid_hz: 30000.0"] {
+        let src = format!(
+            r#"let BPM = 120;
+               let SECTIONS = [["A", 1, "p", "k", "m", 1.0]];
+               let VOICES = #{{ lead: #{{ ch: 0, patch: "piano" }} }};
+               let MIX = #{{ lead: #{{ eq: #{{ {bad} }} }} }};"#
+        );
+        let e = match load_str(&src) {
+            Ok(_) => panic!("通ってしまった: {bad}"),
+            Err(e) => e.to_string(),
+        };
+        assert!(e.contains("eq"), "理由が分からない: {bad} -> {e}");
+    }
+}
+
+#[test]
 fn a_song_patch_beats_the_built_in_one() {
     // 同じ名前なら曲ファイル側が勝つ。内蔵の音色を作り替えられる
     let src = r#"
