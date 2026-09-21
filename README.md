@@ -15,7 +15,7 @@ The song is plain text, so you can write it by hand — or hand
 **The instruments are text too**, so an AI can design the sounds, not just
 the notes. Guitars and basses are modelled strings, not sampled ones.
 
-日本語は下にあります。
+日本語は下
 
 ---
 
