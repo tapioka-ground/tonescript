@@ -358,7 +358,8 @@ impl Mixer {
         for (i, p) in plan.parts.iter().enumerate() {
             dst[i] = Lanes {
                 gain: p.gain_curve.as_ref().and_then(|c| c.at(step)).unwrap_or(1.0),
-                pan: p.pan_curve.as_ref().and_then(|c| c.at(step)).unwrap_or(0.0),
+                // 線を書いてあればそちら、無ければミキサーのつまみ
+                pan: p.pan_curve.as_ref().and_then(|c| c.at(step)).unwrap_or(p.mix.pan),
                 reverb: p.reverb_curve.as_ref().and_then(|c| c.at(step)).unwrap_or(p.mix.reverb),
                 duck: p.duck_curve.as_ref().and_then(|c| c.at(step)).unwrap_or(p.mix.duck),
             };

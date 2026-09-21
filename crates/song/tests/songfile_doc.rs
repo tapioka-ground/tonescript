@@ -549,6 +549,33 @@ let SWING_GRID = 2;"));
 }
 
 #[test]
+fn the_pan_value_is_read_and_checked() {
+    let s = load(
+        r#"let BPM = 120;
+           let SECTIONS = [["A", 1, "p", "k", "m", 1.0]];
+           let VOICES = #{ lead: #{ ch: 0, patch: "piano" } };
+           let MIX = #{ lead: #{ width: 1.35, pan: 0.15, reverb: 0.26 } };"#,
+    );
+    assert!((s.mix["lead"].pan - 0.15).abs() < 1e-6);
+    // 広がりとは別物。両方持てる
+    assert!((s.mix["lead"].width - 1.35).abs() < 1e-6);
+    // 範囲外は止まる
+    for bad in ["pan: 2.0", "pan: -3.0"] {
+        let src = format!(
+            r#"let BPM = 120;
+               let SECTIONS = [["A", 1, "p", "k", "m", 1.0]];
+               let VOICES = #{{ lead: #{{ ch: 0, patch: "piano" }} }};
+               let MIX = #{{ lead: #{{ {bad} }} }};"#
+        );
+        let e = match load_str(&src) {
+            Ok(_) => panic!("通った: {bad}"),
+            Err(e) => e.to_string(),
+        };
+        assert!(e.contains("pan"), "理由が分からない: {e}");
+    }
+}
+
+#[test]
 fn the_eq_example_loads_and_shapes() {
     // §8 に載せた EQ の例。読めて、値がそのまま入ること
     let s = load(

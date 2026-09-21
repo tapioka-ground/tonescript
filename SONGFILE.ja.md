@@ -488,7 +488,7 @@ let GAINS = #{ lead: 1.55, chords: 1.60, bass: 0.90, arp: 1.00,
 let MASTER_GAIN = 1.0;
 
 let MIX = #{
-    lead:   #{ width: 1.35, reverb: 0.26, duck: 0.55 },
+    lead:   #{ width: 1.35, pan: 0.15, reverb: 0.26, duck: 0.55 },
     bass:   #{ width: 0.00, reverb: 0.02, duck: 1.00 },
     drums:  #{ width: 0.45, reverb: 0.08, duck: 0.00 },
 };
@@ -503,6 +503,7 @@ let PREMIX_LUFS = -20.0;
 | `MIX` の鍵 | 意味 |
 |---|---|
 | `width` | 左右の広がり。0 が完全中央。**低音を広げると芯がぼやける**ので `bass` と `sub` は 0 に |
+| `pan` | 左右の位置。-1 が左、1 が右。線を書いてあればそちらが勝つ |
 | `eq` | 音の整え。低・中・高の3つ（下に） | 素通し |
 | `reverb` | 残響へ送る量。0 で送らない。0.2〜0.4 が目安 |
 | `duck` | サイドチェインの掛かり具合。キックのたびに凹む量 |

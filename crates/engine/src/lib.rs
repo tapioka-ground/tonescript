@@ -313,6 +313,13 @@ impl Engine {
         let _ = self.cmd.send(Cmd::Plan(Arc::new(self.plan.clone())));
     }
 
+    /// パートの左右の位置。-1 が左、+1 が右。
+    pub fn set_pan(&mut self, part: &str, pan: f32) {
+        if let Some(i) = self.plan.part_of(part) {
+            self.tweak(|p| p.parts[i].mix.pan = pan.clamp(-1.0, 1.0));
+        }
+    }
+
     /// パートの左右の広がり・残響の送り・ダッキング。
     pub fn set_mix(&mut self, part: &str, width: f32, reverb: f32, duck: f32) {
         if let Some(i) = self.plan.part_of(part) {

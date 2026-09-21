@@ -370,16 +370,22 @@ pub fn mix_down_with(
         }
 
         let mut st = mix::widen(buf, cfg.width);
-        // 左右の線。widen（広がり）とは別物で、こちらは位置を動かす
-        if let Some(p) = lane_of(Lane::Pan) {
+        // 左右。widen（広がり）とは別物で、こちらは位置を寄せる。
+        // 線を書いてあればそちらが勝つ（書いた通りに動かしたいはずなので）
+        let pan_curve = lane_of(Lane::Pan);
+        if pan_curve.is_some() || cfg.pan != 0.0 {
             for i in 0..st.l.len() {
-                let (gl, gr) = mix::pan_gains(p[i]);
+                let p = pan_curve.as_ref().map(|c| c[i]).unwrap_or(cfg.pan);
+                let (gl, gr) = mix::pan_gains(p);
                 // 等出力の配り方は中央で 1/√2 ずつ。中央を 1.0 に直して掛ける
                 st.l[i] *= gl * std::f32::consts::SQRT_2;
                 st.r[i] *= gr * std::f32::consts::SQRT_2;
             }
-            progress(&format!("             オートメーション: 左右 {} 節",
-                lanes.and_then(|m| m.get(&Lane::Pan)).map(|c| c.points.len()).unwrap_or(0)));
+            match &pan_curve {
+                Some(_) => progress(&format!("             オートメーション: 左右 {} 節",
+                    lanes.and_then(|m| m.get(&Lane::Pan)).map(|c| c.points.len()).unwrap_or(0))),
+                None => progress(&format!("             左右 {:+.2}", cfg.pan)),
+            }
         }
         out.add(&st, gain);
     }

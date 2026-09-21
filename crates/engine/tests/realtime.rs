@@ -586,6 +586,39 @@ fn seeking_does_not_stack_the_notes_on_top_of_each_other() {
 }
 
 #[test]
+fn the_pan_knob_moves_the_sound_while_it_plays() {
+    let _one = solo();
+    let (s, sc) = song();
+    let (mut e, mut m) = Engine::new();
+    e.set_song(s, sc);
+    settle();
+    for p in ["lead", "bass", "drums", "perc"] {
+        e.set_pan(p, -1.0);
+    }
+    settle();
+    e.play();
+    let (l, r) = pull(&mut m, 20, 1024, Duration::from_millis(3));
+    assert!(rms(&l) > 0.001, "鳴っていない");
+    assert!(rms(&r) < rms(&l) * 0.1, "左いっぱいなのに右が鳴っている");
+
+    // 右へ振り直す
+    e.stop();
+    e.seek(0);
+    for p in ["lead", "bass", "drums", "perc"] {
+        e.set_pan(p, 1.0);
+    }
+    settle();
+    e.play();
+    let (l2, r2) = pull(&mut m, 20, 1024, Duration::from_millis(3));
+    assert!(rms(&l2) < rms(&r2) * 0.1, "右いっぱいなのに左が鳴っている");
+    // 振っても全体の大きさは変わらない（等出力）
+    let a = (rms(&l) * rms(&l) + rms(&r) * rms(&r)).sqrt();
+    let b = (rms(&l2) * rms(&l2) + rms(&r2) * rms(&r2)).sqrt();
+    let db = 20.0 * (b / a.max(1e-9)).log10();
+    assert!(db.abs() < 1.5, "左右で大きさが {db:+.1}dB 違う");
+}
+
+#[test]
 fn the_eq_changes_the_sound_while_it_plays() {
     let _one = solo();
     let (s, sc) = song();

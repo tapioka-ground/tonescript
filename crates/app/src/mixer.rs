@@ -250,6 +250,28 @@ fn strip(
 
         // 広がり・送り・ダッキング
         let mut touched = false;
+        // 左右。-1〜1 なので、他のつまみと別に書く
+        ui.horizontal(|ui| {
+            ui.label(theme::dim("左右"));
+            let r = ui.add(
+                egui::DragValue::new(&mut mix.pan)
+                    .speed(0.01)
+                    .range(-1.0..=1.0)
+                    .fixed_decimals(2)
+                    .custom_formatter(|v, _| {
+                        if v.abs() < 0.005 {
+                            "中央".into()
+                        } else if v < 0.0 {
+                            format!("L{:.0}", -v * 100.0)
+                        } else {
+                            format!("R{:.0}", v * 100.0)
+                        }
+                    }),
+            );
+            if r.on_hover_text("-1 が左、0 が中央、+1 が右。線を書いてあればそちらが勝つ").changed() {
+                touched = true;
+            }
+        });
         let mut knob = |ui: &mut Ui, label: &str, v: &mut f32, hi: f32, tip: &str| {
             ui.horizontal(|ui| {
                 ui.label(theme::dim(label));

@@ -225,6 +225,7 @@ fn encode(p: &Project) -> Value {
     for (part, m) in &p.mix {
         let mut one = Value::obj();
         one.insert("width", m.width.into());
+        one.insert("pan", m.pan.into());
         one.insert("reverb", m.reverb.into());
         one.insert("duck", m.duck.into());
         let mut e = Value::obj();
@@ -355,6 +356,7 @@ fn decode(v: &Value) -> Result<Project, String> {
                 part.clone(),
                 MixCfg {
                     width: num("width", 0.0, 4.0, 0.0),
+                    pan: num("pan", -1.0, 1.0, 0.0),
                     eq: read_eq(one),
                     reverb: num("reverb", 0.0, 2.0, 0.0),
                     duck: num("duck", 0.0, 2.0, 0.0),

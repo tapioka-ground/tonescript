@@ -486,7 +486,7 @@ let GAINS = #{ lead: 1.55, chords: 1.60, bass: 0.90, arp: 1.00,
 let MASTER_GAIN = 1.0;
 
 let MIX = #{
-    lead:   #{ width: 1.35, reverb: 0.26, duck: 0.55 },
+    lead:   #{ width: 1.35, pan: 0.15, reverb: 0.26, duck: 0.55 },
     bass:   #{ width: 0.00, reverb: 0.02, duck: 1.00 },
     drums:  #{ width: 0.45, reverb: 0.08, duck: 0.00 },
 };
@@ -501,6 +501,7 @@ let PREMIX_LUFS = -20.0;
 | `MIX` key | Meaning |
 |---|---|
 | `width` | stereo width. 0 is dead centre. **Widening the low end blurs it**, so keep `bass` and `sub` at 0 |
+| `pan` | where it sits, -1 (left) to 1 (right). An automation lane wins over it |
 | `eq` | three bands of tone shaping (below) | flat |
 | `reverb` | send amount. 0 sends nothing. 0.2–0.4 is a normal range |
 | `duck` | how much the sidechain pushes this part down on every kick |

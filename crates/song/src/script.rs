@@ -592,6 +592,13 @@ fn read_eq(m: &Map, part: &str) -> R<tonescript_dsp::eq::EqCfg> {
                 k.to_string(),
                 MixCfg {
                     width: field(&m, "width").map(|v| num(v, "width")).transpose()?.unwrap_or(0.0),
+                    pan: {
+                        let v = field(&m, "pan").map(|v| num(v, "pan")).transpose()?.unwrap_or(0.0);
+                        if !(-1.0..=1.0).contains(&v) {
+                            return shape(format!("MIX.{k} の pan が {v} です。-1〜1 の間に"));
+                        }
+                        v
+                    },
                     eq: read_eq(&m, k)?,
                     reverb: field(&m, "reverb").map(|v| num(v, "reverb")).transpose()?.unwrap_or(0.0),
                     duck: field(&m, "duck").map(|v| num(v, "duck")).transpose()?.unwrap_or(0.0),
