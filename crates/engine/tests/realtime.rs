@@ -619,6 +619,90 @@ fn the_pan_knob_moves_the_sound_while_it_plays() {
 }
 
 #[test]
+fn the_compressor_evens_out_the_level_while_it_plays() {
+    let _one = solo();
+    let (s, sc) = song();
+    let (mut e, mut m) = Engine::new();
+    e.set_song(s, sc);
+    let t0 = Instant::now();
+    while e.makeup() == 1.0 && t0.elapsed() < Duration::from_secs(20) {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    settle();
+
+    // **天井に当てない。** 当たると波形が潰れて、尖り具合が測れなくなる
+    //（素のほうが尖り 1.94 = ほぼ正弦波、という結果が出て読み違えた）
+    e.set_master_gain(0.05);
+    settle();
+
+    let mut take = |e: &mut Engine, m: &mut Mixer| -> Vec<f32> {
+        e.seek(0);
+        std::thread::sleep(Duration::from_millis(250));
+        e.play();
+        let (l, _) = pull(m, 30, 1024, Duration::from_millis(3));
+        e.stop();
+        l
+    };
+    let raw = take(&mut e, &mut m);
+
+    // 強く押さえる。山と谷の差が縮むこと。
+    //
+    // **アタックは速くする。** 既定の 10ms では打撃の頭が意図どおり
+    // 通り抜けるので、尖りはむしろ増える（それが本物の振る舞いで、
+    // パンチを残すために使う設定）。頭まで捕まえたいときは速くする
+    let cfg = tonescript_dsp::comp::CompCfg {
+        threshold: -30.0,
+        ratio: 12.0,
+        attack: 0.5,
+        release: 80.0,
+        knee: 3.0,
+        makeup: 0.0,
+    };
+    for p in ["lead", "bass", "drums", "perc"] {
+        e.set_comp(p, cfg);
+    }
+    settle();
+    let squashed = take(&mut e, &mut m);
+
+    // **時間ごとの音量のばらつき**で見る。「揃える」とはこれのこと。
+    //
+    // 山の高さ÷実効値（尖り具合）では測れない。単発の打撃1つに左右される
+    // 上に、頭を通す設定のほうが尖りは増えるので、逆の結論が出る
+    let spread = |x: &[f32]| -> f32 {
+        let win = (0.05 * SR) as usize;
+        let mut lv: Vec<f32> = x
+            .chunks(win)
+            .filter(|c| c.len() == win)
+            .map(|c| 20.0 * rms(c).max(1e-9).log10())
+            .filter(|d| *d > -60.0)
+            .collect();
+        if lv.len() < 4 {
+            return 0.0;
+        }
+        lv.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        // 上下の端は外して、真ん中の幅を見る
+        let (lo, hi) = (lv[lv.len() / 10], lv[lv.len() * 9 / 10]);
+        hi - lo
+    };
+    let (a, b) = (spread(&raw), spread(&squashed));
+    // この曲は元から平らなので、縮む幅は大きくない。**向きを見る**
+    assert!(b < a, "押さえても揃わない（素 {a:.1}dB / 押さえ {b:.1}dB）");
+
+    // 押さえたぶん小さくなっていること
+    let down = 20.0 * (rms(&squashed) / rms(&raw).max(1e-9)).log10();
+    assert!(down < -3.0, "押さえたのに小さくなっていない（{down:+.1}dB）");
+
+    // 持ち上げれば戻ること。**ここまで通れば、鳴らす側の道が全部生きている**
+    for p in ["lead", "bass", "drums", "perc"] {
+        e.set_comp(p, tonescript_dsp::comp::CompCfg { makeup: 12.0, ..cfg });
+    }
+    settle();
+    let lifted = take(&mut e, &mut m);
+    let up = 20.0 * (rms(&lifted) / rms(&squashed).max(1e-9)).log10();
+    assert!((up - 12.0).abs() < 1.5, "持ち上げが {up:+.1}dB（+12 のはず）");
+}
+
+#[test]
 fn the_eq_changes_the_sound_while_it_plays() {
     let _one = solo();
     let (s, sc) = song();

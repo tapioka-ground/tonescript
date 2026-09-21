@@ -132,6 +132,8 @@ pub struct MixCfg {
     pub pan: f32,
     /// 音の整え（低・中・高）
     pub eq: tonescript_dsp::eq::EqCfg,
+    /// 押さえ込み。**EQ の次に通る**（整えてから押さえる）
+    pub comp: tonescript_dsp::comp::CompCfg,
     /// 残響の送り量
     pub reverb: f32,
     /// サイドチェインの掛かり具合
@@ -144,6 +146,7 @@ impl Default for MixCfg {
             width: 0.0,
             pan: 0.0,
             eq: tonescript_dsp::eq::EqCfg::default(),
+            comp: tonescript_dsp::comp::CompCfg::default(),
             reverb: 0.0,
             duck: 0.0,
         }

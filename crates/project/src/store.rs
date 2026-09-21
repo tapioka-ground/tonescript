@@ -237,6 +237,14 @@ fn encode(p: &Project) -> Value {
         e.insert("mid_q", m.eq.mid_q.into());
         e.insert("high_hz", m.eq.high_hz.into());
         one.insert("eq", e);
+        let mut c = Value::obj();
+        c.insert("threshold", m.comp.threshold.into());
+        c.insert("ratio", m.comp.ratio.into());
+        c.insert("attack", m.comp.attack.into());
+        c.insert("release", m.comp.release.into());
+        c.insert("knee", m.comp.knee.into());
+        c.insert("makeup", m.comp.makeup.into());
+        one.insert("comp", c);
         mix.insert(part, one);
     }
     root.insert("mix", mix);
@@ -276,6 +284,23 @@ fn read_eq(one: &Value) -> tonescript_dsp::eq::EqCfg {
         mid_hz: num("mid_hz", 20.0, 18_000.0, d.mid_hz),
         mid_q: num("mid_q", 0.2, 12.0, d.mid_q),
         high_hz: num("high_hz", 20.0, 18_000.0, d.high_hz),
+    }
+}
+
+/// 保存した押さえ込みを読む。範囲外は引き戻す。
+fn read_comp(one: &Value) -> tonescript_dsp::comp::CompCfg {
+    let d = tonescript_dsp::comp::CompCfg::default();
+    let Some(c) = one.get("comp").and_then(|x| x.as_obj()) else { return d };
+    let num = |k: &str, lo: f32, hi: f32, dflt: f32| -> f32 {
+        c.get(k).and_then(|x| x.as_f64()).map(|v| (v as f32).clamp(lo, hi)).unwrap_or(dflt)
+    };
+    tonescript_dsp::comp::CompCfg {
+        threshold: num("threshold", -60.0, 0.0, d.threshold),
+        ratio: num("ratio", 1.0, 20.0, d.ratio),
+        attack: num("attack", 0.1, 200.0, d.attack),
+        release: num("release", 1.0, 2000.0, d.release),
+        knee: num("knee", 0.0, 24.0, d.knee),
+        makeup: num("makeup", -12.0, 24.0, d.makeup),
     }
 }
 
@@ -358,6 +383,7 @@ fn decode(v: &Value) -> Result<Project, String> {
                     width: num("width", 0.0, 4.0, 0.0),
                     pan: num("pan", -1.0, 1.0, 0.0),
                     eq: read_eq(one),
+                    comp: read_comp(one),
                     reverb: num("reverb", 0.0, 2.0, 0.0),
                     duck: num("duck", 0.0, 2.0, 0.0),
                 },

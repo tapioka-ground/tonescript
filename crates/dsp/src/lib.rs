@@ -13,6 +13,7 @@
 //! なぜその値なのかは Python 側のコメントに残っているので、
 //! 変えるときは必ず測ってから変える。
 
+pub mod comp;
 pub mod drum;
 pub mod env;
 pub mod eq;

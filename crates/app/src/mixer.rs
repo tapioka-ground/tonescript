@@ -178,6 +178,67 @@ pub fn panel(
     out
 }
 
+/// つまみ1つ。**変わったかどうかを返す。**
+///
+/// 閉包にすると、複数のつまみが同じ変数を同時に握ってしまって書けない。
+/// 値を返す形にすれば、呼ぶ側で `|=` していける。
+fn knob(ui: &mut Ui, label: &str, v: &mut f32, hi: f32, tip: &str) -> bool {
+    ui.horizontal(|ui| {
+        ui.label(theme::dim(label));
+        let r = ui.add(egui::DragValue::new(v).speed(0.01).range(0.0..=hi).fixed_decimals(2));
+        r.on_hover_text(tip).changed()
+    })
+    .inner
+}
+
+/// dB のつまみ。
+fn db_row(ui: &mut Ui, label: &str, v: &mut f32, tip: &str) -> bool {
+    ui.horizontal(|ui| {
+        ui.label(theme::dim(label));
+        let r = ui.add(
+            egui::DragValue::new(v).speed(0.1).range(-24.0..=24.0).fixed_decimals(1).suffix("dB"),
+        );
+        r.on_hover_text(tip).changed()
+    })
+    .inner
+}
+
+/// 左右の位置。
+fn pan_row(ui: &mut Ui, v: &mut f32) -> bool {
+    ui.horizontal(|ui| {
+        ui.label(theme::dim("左右"));
+        let r = ui.add(
+            egui::DragValue::new(v).speed(0.01).range(-1.0..=1.0).fixed_decimals(2).custom_formatter(
+                |v, _| {
+                    if v.abs() < 0.005 {
+                        "中央".into()
+                    } else if v < 0.0 {
+                        format!("L{:.0}", -v * 100.0)
+                    } else {
+                        format!("R{:.0}", v * 100.0)
+                    }
+                },
+            ),
+        );
+        r.on_hover_text("-1 が左、0 が中央、+1 が右。線を書いてあればそちらが勝つ").changed()
+    })
+    .inner
+}
+
+/// 押さえ込みの比。
+fn ratio_row(ui: &mut Ui, v: &mut f32) -> bool {
+    ui.horizontal(|ui| {
+        ui.label(theme::dim("押"));
+        let r = ui.add(
+            egui::DragValue::new(v).speed(0.05).range(1.0..=20.0).fixed_decimals(1).custom_formatter(
+                |v, _| if v <= 1.001 { "切".into() } else { format!("{v:.1}:1") },
+            ),
+        );
+        r.on_hover_text("押さえる比。大きい所だけを小さくして、差を縮める").changed()
+    })
+    .inner
+}
+
 /// パート1本ぶん。
 fn strip(
     ui: &mut Ui,
@@ -251,61 +312,24 @@ fn strip(
         // 広がり・送り・ダッキング
         let mut touched = false;
         // 左右。-1〜1 なので、他のつまみと別に書く
-        ui.horizontal(|ui| {
-            ui.label(theme::dim("左右"));
-            let r = ui.add(
-                egui::DragValue::new(&mut mix.pan)
-                    .speed(0.01)
-                    .range(-1.0..=1.0)
-                    .fixed_decimals(2)
-                    .custom_formatter(|v, _| {
-                        if v.abs() < 0.005 {
-                            "中央".into()
-                        } else if v < 0.0 {
-                            format!("L{:.0}", -v * 100.0)
-                        } else {
-                            format!("R{:.0}", v * 100.0)
-                        }
-                    }),
-            );
-            if r.on_hover_text("-1 が左、0 が中央、+1 が右。線を書いてあればそちらが勝つ").changed() {
-                touched = true;
-            }
-        });
-        let mut knob = |ui: &mut Ui, label: &str, v: &mut f32, hi: f32, tip: &str| {
-            ui.horizontal(|ui| {
-                ui.label(theme::dim(label));
-                let r = ui.add(
-                    egui::DragValue::new(v).speed(0.01).range(0.0..=hi).fixed_decimals(2),
-                );
-                if r.on_hover_text(tip).changed() {
-                    touched = true;
-                }
-            });
-        };
-        knob(ui, "幅", &mut mix.width, 4.0, "左右の広がり。0 で完全中央。低音は 0 のまま");
-        knob(ui, "残", &mut mix.reverb, 2.0, "残響へ送る量。0 で送らない");
-        knob(ui, "凹", &mut mix.duck, 2.0, "キックのたびに凹む量（サイドチェイン）");
+        touched |= pan_row(ui, &mut mix.pan);
+
+        touched |= knob(ui, "幅", &mut mix.width, 4.0, "左右の広がり。0 で完全中央。低音は 0 のまま");
+        touched |= knob(ui, "残", &mut mix.reverb, 2.0, "残響へ送る量。0 で送らない");
+        touched |= knob(ui, "凹", &mut mix.duck, 2.0, "キックのたびに凹む量（サイドチェイン）");
         // 音の整え。dB なので別の見た目にする
         ui.add_space(2.0);
-        let mut db = |ui: &mut Ui, label: &str, v: &mut f32, tip: &str| {
-            ui.horizontal(|ui| {
-                ui.label(theme::dim(label));
-                let r = ui.add(
-                    egui::DragValue::new(v)
-                        .speed(0.1)
-                        .range(-24.0..=24.0)
-                        .fixed_decimals(1)
-                        .suffix("dB"),
-                );
-                if r.on_hover_text(tip).changed() {
-                    touched = true;
-                }
-            });
-        };
-        db(ui, "低", &mut mix.eq.low, "200Hz から下。ベースとキックがぶつかるときは、片方を削る");
-        db(ui, "中", &mut mix.eq.mid, "1kHz のあたり。削ると引っ込み、上げると前に出る");
-        db(ui, "高", &mut mix.eq.high, "4kHz から上。上げると明るく、削ると丸くなる");
+
+        touched |= db_row(ui, "低", &mut mix.eq.low, "200Hz から下。ベースとキックがぶつかるときは、片方を削る");
+        touched |= db_row(ui, "中", &mut mix.eq.mid, "1kHz のあたり。削ると引っ込み、上げると前に出る");
+        touched |= db_row(ui, "高", &mut mix.eq.high, "4kHz から上。上げると明るく、削ると丸くなる");
+        // 押さえ込み
+        ui.add_space(2.0);
+        touched |= ratio_row(ui, &mut mix.comp.ratio);
+        if mix.comp.ratio > 1.001 {
+            touched |= db_row(ui, "閾", &mut mix.comp.threshold, "ここを越えたぶんを押さえる");
+            touched |= db_row(ui, "戻", &mut mix.comp.makeup, "押さえたぶんを持ち上げる");
+        }
         if touched {
             out.push(Edit::Mix { part: part.to_string(), mix });
         }

@@ -549,6 +549,39 @@ let SWING_GRID = 2;"));
 }
 
 #[test]
+fn the_compressor_example_loads() {
+    let s = load(
+        r#"let BPM = 120;
+           let SECTIONS = [["A", 1, "p", "k", "m", 1.0]];
+           let VOICES = #{ vocal: #{ ch: 0, patch: "piano" } };
+           let MIX = #{
+               vocal: #{ comp: #{ threshold: -18, ratio: 4, attack: 10, release: 120, makeup: 4 } },
+           };"#,
+    );
+    let c = s.mix["vocal"].comp;
+    assert_eq!(c.threshold, -18.0);
+    assert_eq!(c.ratio, 4.0);
+    assert_eq!(c.makeup, 4.0);
+    assert!(!c.is_off());
+    // 書かなければ何もしない
+    assert!(tonescript_dsp::comp::CompCfg::default().is_off());
+
+    for bad in ["ratio: 50", "threshold: 10", "attack: 0"] {
+        let src = format!(
+            r#"let BPM = 120;
+               let SECTIONS = [["A", 1, "p", "k", "m", 1.0]];
+               let VOICES = #{{ lead: #{{ ch: 0, patch: "piano" }} }};
+               let MIX = #{{ lead: #{{ comp: #{{ {bad} }} }} }};"#
+        );
+        let e = match load_str(&src) {
+            Ok(_) => panic!("通った: {bad}"),
+            Err(e) => e.to_string(),
+        };
+        assert!(e.contains("comp"), "理由が分からない: {e}");
+    }
+}
+
+#[test]
 fn the_pan_value_is_read_and_checked() {
     let s = load(
         r#"let BPM = 120;

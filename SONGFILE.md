@@ -503,6 +503,7 @@ let PREMIX_LUFS = -20.0;
 | `width` | stereo width. 0 is dead centre. **Widening the low end blurs it**, so keep `bass` and `sub` at 0 |
 | `pan` | where it sits, -1 (left) to 1 (right). An automation lane wins over it |
 | `eq` | three bands of tone shaping (below) | flat |
+| `comp` | hold the loud parts down (below) | off |
 | `reverb` | send amount. 0 sends nothing. 0.2–0.4 is a normal range |
 | `duck` | how much the sidechain pushes this part down on every kick |
 
@@ -534,6 +535,36 @@ gets used is "take the bottom off", "push or pull the middle", "add air".
 
 **Cutting beats boosting.** If a part is dull, first try cutting the middle
 of whatever is on top of it. Everything you boost also eats headroom.
+
+### `comp` — evening out the loud and the quiet
+
+**It makes the loud parts quieter.** The gap between loud and quiet
+narrows, so you can raise the whole thing without it breaking up, and the
+part stops disappearing behind everything else.
+
+Vocals need it most. Nobody sings at a constant level, so a raw take has
+peaks that clip and quiet lines you cannot hear.
+
+```rhai
+let MIX = #{
+    vocal: #{ comp: #{ threshold: -18, ratio: 4, attack: 10, release: 120, makeup: 4 } },
+};
+```
+
+| Key | Meaning | Default |
+|---|---|---|
+| `threshold` | dB above which it starts, -60 to 0 | -18 |
+| `ratio` | 4 means "4 dB over gives 1 dB out". 1 does nothing | 4 when you write `comp` |
+| `attack` | ms before it bites | 10 |
+| `release` | ms to let go | 120 |
+| `knee` | dB of rounding at the corner | 6 |
+| `makeup` | dB to put back afterwards | 0 |
+
+**Attack is what people hear.** Slow (30–80 ms) lets the hit of a drum
+through and keeps the punch. Fast (under 1 ms) catches the hit too and
+flattens it.
+
+It runs **after the EQ** — shape it first, then hold it down.
 
 ### Using the reverb
 

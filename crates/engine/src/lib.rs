@@ -313,6 +313,13 @@ impl Engine {
         let _ = self.cmd.send(Cmd::Plan(Arc::new(self.plan.clone())));
     }
 
+    /// パートの押さえ込み。比 1 で何もしない。
+    pub fn set_comp(&mut self, part: &str, cfg: tonescript_dsp::comp::CompCfg) {
+        if let Some(i) = self.plan.part_of(part) {
+            self.tweak(|p| p.parts[i].mix.comp = cfg);
+        }
+    }
+
     /// パートの左右の位置。-1 が左、+1 が右。
     pub fn set_pan(&mut self, part: &str, pan: f32) {
         if let Some(i) = self.plan.part_of(part) {

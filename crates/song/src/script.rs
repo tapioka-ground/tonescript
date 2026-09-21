@@ -557,6 +557,24 @@ fn build(scope: &Scope) -> R<Song> {
             s.gains.insert(k.to_string(), num(val, "GAINS の値")?);
         }
     }
+/// `MIX.<パート>.comp` を読む。書いていなければ何もしない。
+fn read_comp(m: &Map, part: &str) -> R<tonescript_dsp::comp::CompCfg> {
+    let Some(v) = field(m, "comp") else { return Ok(Default::default()) };
+    let cm = map(v, &format!("MIX.{part}.comp"))?;
+    let d = tonescript_dsp::comp::CompCfg::default();
+    let cfg = tonescript_dsp::comp::CompCfg {
+        threshold: mnum(&cm, "threshold", d.threshold)?,
+        // 比だけは、書いたら効いてほしいので既定を 4 にする
+        ratio: mnum(&cm, "ratio", 4.0)?,
+        attack: mnum(&cm, "attack", d.attack)?,
+        release: mnum(&cm, "release", d.release)?,
+        knee: mnum(&cm, "knee", d.knee)?,
+        makeup: mnum(&cm, "makeup", d.makeup)?,
+    };
+    cfg.check().map_err(|e| LoadError::Shape(format!("MIX.{part}: {e}")))?;
+    Ok(cfg)
+}
+
 /// `MIX.<パート>.eq` を読む。書いていない所は素通し。
 fn read_eq(m: &Map, part: &str) -> R<tonescript_dsp::eq::EqCfg> {
     let Some(v) = field(m, "eq") else { return Ok(Default::default()) };
@@ -600,6 +618,7 @@ fn read_eq(m: &Map, part: &str) -> R<tonescript_dsp::eq::EqCfg> {
                         v
                     },
                     eq: read_eq(&m, k)?,
+                    comp: read_comp(&m, k)?,
                     reverb: field(&m, "reverb").map(|v| num(v, "reverb")).transpose()?.unwrap_or(0.0),
                     duck: field(&m, "duck").map(|v| num(v, "duck")).transpose()?.unwrap_or(0.0),
                 },

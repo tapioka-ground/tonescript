@@ -328,6 +328,17 @@ pub fn mix_down_with(
                 cfg.eq.low, cfg.eq.mid, cfg.eq.high
             ));
         }
+        // 押さえ込み。**整えてから押さえる**
+        if !cfg.comp.is_off() {
+            let mut c = tonescript_dsp::comp::Comp::new(cfg.comp);
+            c.process(buf);
+            progress(&format!(
+                "             押さえ込み {:.0}dB から {:.0}:1  最大 {:.1}dB 削った",
+                cfg.comp.threshold,
+                cfg.comp.ratio,
+                c.reduction_db()
+            ));
+        }
         let gain = song.gains.get(name).copied().unwrap_or(1.0);
         let lanes = song.automation.get(name);
         let lane_of = |l: Lane| -> Option<Vec<f32>> {

@@ -230,6 +230,8 @@ pub struct Mixer {
     /// パートごとの音の整え。**状態を持つので使い回す**
     /// （毎ブロック作り直すと中の値が消えてプツプツ鳴る）
     eq: Vec<tonescript_dsp::eq::Eq>,
+    /// パートごとの押さえ込み。同じく状態を持つ
+    comp: Vec<tonescript_dsp::comp::Comp>,
     /// いま鳴っている音の数（画面に出す）
     live: Arc<AtomicU64>,
     /// 針
@@ -270,6 +272,7 @@ impl Mixer {
             trim: Vec::new(),
             audio: std::sync::Arc::new(Vec::new()),
             eq: vec![tonescript_dsp::eq::Eq::default(); MAX_PARTS],
+            comp: vec![tonescript_dsp::comp::Comp::default(); MAX_PARTS],
             live,
             meters,
             loudness: crate::meter::Loudness::new(),
@@ -323,6 +326,9 @@ impl Mixer {
                     for e in self.eq.iter_mut() {
                         e.clear();
                     }
+                    for c in self.comp.iter_mut() {
+                        c.clear();
+                    }
                     self.cursor.reset();
                     self.have_prev = false;
                 }
@@ -375,6 +381,7 @@ impl Mixer {
             self.lane_a.resize(np, Lanes::default());
             self.lane_b.resize(np, Lanes::default());
             self.eq.resize(np, tonescript_dsp::eq::Eq::default());
+            self.comp.resize(np, tonescript_dsp::comp::Comp::default());
         }
         for a in self.acc.iter_mut().take(np) {
             if a.len() < n {
@@ -474,6 +481,10 @@ impl Mixer {
             if !flat {
                 self.eq[pi].set(part.mix.eq);
             }
+            let no_comp = part.mix.comp.is_off();
+            if !no_comp {
+                self.comp[pi].set(part.mix.comp);
+            }
             for i in 0..n {
                 let t = i as f32 / n as f32;
                 let g = a.gain + (b.gain - a.gain) * t;
@@ -495,6 +506,9 @@ impl Mixer {
                 }
                 if !flat {
                     v = self.eq[pi].run(v);
+                }
+                if !no_comp {
+                    v = self.comp[pi].run(v);
                 }
                 v *= g;
                 if rv > 0.0 {
