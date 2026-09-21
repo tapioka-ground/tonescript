@@ -399,6 +399,27 @@ let TEMPO_CURVE = "smooth";   // "smooth" (default) or "linear"
 **Dropping over a few bars beats stopping dead** — the next full section
 hits harder.
 
+### `SWING` — getting off the grid
+
+Everything written here lands exactly on the grid, which is right for
+machine music and wrong for most other kinds. Swing lengthens the first of
+each pair of steps and shortens the second.
+
+```rhai
+let SWING = 0.6;      // 0 straight, 1 full triplet
+let SWING_GRID = 2;   // 2 = eighths (default), 4 = quarters, 1 = sixteenths
+```
+
+**It does not move your notes.** The written score stays exactly as it is;
+what changes is how long each step lasts. So you can turn it up and down
+and hear the difference without ever editing the notes back.
+
+The pair always sums to the same length, so **the song does not get longer
+or shorter** and every bar still starts on time — the other parts stay
+locked to it.
+
+Around 0.5–0.7 is a normal shuffle. 1.0 is a hard triplet feel.
+
 ### `TRANSPOSE`
 
 Bar number → semitones up. **Drums are never transposed.**
@@ -928,6 +949,8 @@ Worth telling the AI up front:
 | `KEY` | | string | `""` |
 | `TEMPO_MAP` | | bar → BPM | `{1: BPM}` |
 | `TEMPO_CURVE` | | `"smooth"` / `"linear"` | `"smooth"` |
+| `SWING` | | 0–1 | 0 (straight) |
+| `SWING_GRID` | | steps per swung unit | 2 |
 | `CHORDS` | | bar → chord | none |
 | `MELODY` | | bar → melody | none |
 | `ARRANGE` | | bar → parts | none (= silence) |

@@ -576,6 +576,15 @@ fn read_eq(m: &Map, part: &str) -> R<tonescript_dsp::eq::EqCfg> {
     Ok(cfg)
 }
 
+    s.swing = num_or(scope, "SWING", 0.0)?;
+    if !(0.0..=1.0).contains(&s.swing) {
+        return shape(format!("SWING が {} です。0〜1 の間に（0 で均等、1 で三連符）", s.swing));
+    }
+    s.swing_grid = num_or(scope, "SWING_GRID", 2.0)? as u32;
+    if !(1..=16).contains(&s.swing_grid) {
+        return shape(format!("SWING_GRID が {} です。1〜16 の間に", s.swing_grid));
+    }
+
     if let Some(v) = get(scope, "MIX") {
         for (k, val) in map(&v, "MIX")?.iter() {
             let m = map(val, "MIX の中身")?;

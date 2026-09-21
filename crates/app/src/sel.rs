@@ -105,6 +105,53 @@ pub fn nudge(notes: &mut [Note], sel: &[usize], dstep: i32, dpitch: i32, total: 
     true
 }
 
+/// 目盛りへ揃える。
+///
+/// `strength` は寄せる割合。1.0 でぴったり、0.5 で半分だけ寄る。
+/// **ぴったりにすると死ぬ**ことがあるので、割合を選べるようにしてある。
+/// 人が弾いた僅かなずれが「ノリ」なので、全部消すと機械になる。
+///
+/// 長さは変えない。頭だけを揃えるのが普通で、長さまで揃えると
+/// 切れ目が不自然になる。
+pub fn quantize(notes: &mut [Note], sel: &[usize], grid: u32, strength: f32, total: u32) -> bool {
+    let g = grid.max(1) as i64;
+    let k = strength.clamp(0.0, 1.0);
+    if sel.is_empty() || k <= 0.0 {
+        return false;
+    }
+    let mut changed = false;
+    for i in sel {
+        let Some(n) = notes.get_mut(*i) else { continue };
+        let pos = n.pos as i64;
+        // いちばん近い目盛り
+        let near = ((pos as f64 / g as f64).round() as i64) * g;
+        let want = pos + ((near - pos) as f32 * k).round() as i64;
+        let len = n.len.max(1) as i64;
+        let want = want.clamp(0, (total as i64 - len).max(0));
+        if want != pos {
+            n.pos = want as u32;
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// 長さを目盛りへ揃える。短すぎるものは1目盛り残す。
+pub fn quantize_len(notes: &mut [Note], sel: &[usize], grid: u32, total: u32) -> bool {
+    let g = grid.max(1);
+    let mut changed = false;
+    for i in sel {
+        let Some(n) = notes.get_mut(*i) else { continue };
+        let near = (((n.len.max(1) as f64) / g as f64).round() as u32 * g).max(g);
+        let len = near.min(total.saturating_sub(n.pos)).max(1);
+        if n.len != len {
+            n.len = len;
+            changed = true;
+        }
+    }
+    changed
+}
+
 /// 強さを変える。
 ///
 /// 掴んだものが**選んでいるものの1つなら、選んだぶん全部を同じだけ**動かす。
@@ -331,6 +378,65 @@ mod tests {
         let before = ns.clone();
         assert!(!nudge(&mut ns, &[3], 100, 0, 64), "曲の外へ出た");
         assert_eq!(ns, before);
+    }
+
+    #[test]
+    fn quantizing_pulls_notes_onto_the_grid() {
+        let mut ns = vec![n(1, 4, 60), n(7, 4, 62), n(9, 4, 64)];
+        assert!(quantize(&mut ns, &[0, 1, 2], 4, 1.0, 64));
+        assert_eq!(ns[0].pos, 0, "1 が 0 へ");
+        assert_eq!(ns[1].pos, 8, "7 が 8 へ");
+        assert_eq!(ns[2].pos, 8, "9 が 8 へ");
+        // 長さは触らない
+        assert_eq!(ns[0].len, 4);
+    }
+
+    #[test]
+    fn a_note_exactly_between_two_lines_goes_forward() {
+        // 10 は 8 と 12 のちょうど真ん中。どちらへ行くかは決めておく
+        let mut ns = vec![n(10, 4, 60)];
+        quantize(&mut ns, &[0], 4, 1.0, 64);
+        assert_eq!(ns[0].pos, 12, "真ん中のときは後ろへ");
+    }
+
+    #[test]
+    fn half_strength_moves_half_way() {
+        // ノリを残すための割合。全部消すと機械になる
+        let mut ns = vec![n(2, 4, 60)];
+        quantize(&mut ns, &[0], 4, 0.5, 64);
+        assert_eq!(ns[0].pos, 3, "2 から 4 へ半分なら 3");
+    }
+
+    #[test]
+    fn quantizing_zero_strength_does_nothing() {
+        let mut ns = vec![n(3, 4, 60)];
+        assert!(!quantize(&mut ns, &[0], 4, 0.0, 64));
+        assert_eq!(ns[0].pos, 3);
+    }
+
+    #[test]
+    fn quantizing_never_pushes_a_note_out_of_the_song() {
+        let mut ns = vec![n(62, 4, 60)];
+        quantize(&mut ns, &[0], 8, 1.0, 64);
+        assert!(ns[0].pos + ns[0].len <= 64, "曲の外へ出た: {}", ns[0].pos);
+    }
+
+    #[test]
+    fn note_lengths_can_be_tidied_too() {
+        let mut ns = vec![n(0, 3, 60), n(8, 9, 62)];
+        assert!(quantize_len(&mut ns, &[0, 1], 4, 64));
+        assert_eq!(ns[0].len, 4, "3 が 4 へ");
+        assert_eq!(ns[1].len, 8, "9 が 8 へ");
+        // 頭は動かない
+        assert_eq!(ns[1].pos, 8);
+    }
+
+    #[test]
+    fn a_tidied_length_never_reaches_past_the_end() {
+        let mut ns = vec![n(60, 3, 60)];
+        quantize_len(&mut ns, &[0], 8, 64);
+        assert!(ns[0].pos + ns[0].len <= 64);
+        assert!(ns[0].len >= 1, "長さが 0 になった");
     }
 
     #[test]

@@ -96,6 +96,33 @@ pub fn set_number(text: &str, name: &str, value: f64) -> R<String> {
     Ok(replace_line(text, at, &format!("let {name} = {v};")))
 }
 
+/// 数を書き換える。**その行が無ければ、目印の次に足す。**
+///
+/// `SWING` のように後から入れた値は、既にある曲ファイルには書かれていない。
+/// 「無いから書けません」では画面から触れないので、ここで足す。
+const NL: char = '\n';
+
+pub fn set_or_add_number(text: &str, name: &str, value: f64, after: &str) -> R<String> {
+    if find_line(text, name).is_ok() {
+        return set_number(text, name, value);
+    }
+    let at = find_line(text, after)?;
+    let v = if value == value.trunc() && value.abs() < 1e9 {
+        format!("{}", value as i64)
+    } else {
+        format!("{:.3}", value).trim_end_matches('0').trim_end_matches('.').to_string()
+    };
+    let mut lines: Vec<&str> = text.lines().collect();
+    let line = format!("let {name} = {v};");
+    lines.insert(at + 1, &line);
+    let mut out = lines.join("
+");
+    if text.ends_with(NL) {
+        out.push(NL);
+    }
+    Ok(out)
+}
+
 /// 文字列を書き換える。
 pub fn set_text(text: &str, name: &str, value: &str) -> R<String> {
     let at = find_line(text, name)?;
@@ -191,6 +218,9 @@ pub struct Edit {
     pub key: Option<String>,
     pub master_lufs: Option<f32>,
     pub master_gain: Option<f32>,
+    /// ハネ具合。行が無ければ足す
+    pub swing: Option<f32>,
+    pub swing_grid: Option<u32>,
     pub sections: Option<Vec<Section>>,
 }
 
@@ -220,6 +250,12 @@ impl Edit {
         }
         if let Some(v) = self.master_gain {
             out = set_number(&out, "MASTER_GAIN", v as f64)?;
+        }
+        if let Some(v) = self.swing {
+            out = set_or_add_number(&out, "SWING", v as f64, "BPM")?;
+        }
+        if let Some(v) = self.swing_grid {
+            out = set_or_add_number(&out, "SWING_GRID", v as f64, "BPM")?;
         }
         if let Some(v) = &self.sections {
             out = set_sections(&out, v)?;
@@ -359,6 +395,8 @@ let MASTER_LUFS = -9;
             master_lufs: Some(-12.0),
             master_gain: Some(0.9),
             sections: Some(vec![sec("A", 4, Meter::default())]),
+            swing: None,
+            swing_grid: None,
         };
         let out = e.apply(SRC).unwrap();
         let s = verify(&out).unwrap();
@@ -380,6 +418,8 @@ let MASTER_LUFS = -9;
             master_lufs: None,
             master_gain: None,
             sections: None,
+            swing: None,
+            swing_grid: None,
         };
         let out = e.apply(SRC).unwrap();
         assert!(out.contains("let TEMPO_MAP = #{ \"1\": 90 };"), "{out}");
@@ -401,6 +441,8 @@ let MASTER_LUFS = -9;
             master_lufs: None,
             master_gain: None,
             sections: None,
+            swing: None,
+            swing_grid: None,
         };
         let out = e.apply(&src).unwrap();
         assert!(out.contains(r#""17": 174"#), "手で書いた節目が消えた");
@@ -417,6 +459,8 @@ let MASTER_LUFS = -9;
             master_lufs: None,
             master_gain: None,
             sections: Some(vec![sec("A", 0, Meter::default())]),
+            swing: None,
+            swing_grid: None,
         };
         let err = e.apply(SRC).unwrap_err();
         assert!(matches!(err, Error::Broken(_)), "{err}");
@@ -431,6 +475,8 @@ let MASTER_LUFS = -9;
             master_lufs: None,
             master_gain: None,
             sections: None,
+            swing: None,
+            swing_grid: None,
         };
         let out = e.apply(SRC).unwrap();
         assert_eq!(out.trim_end(), SRC.trim_end(), "触っていないのに変わった");

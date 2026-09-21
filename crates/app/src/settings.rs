@@ -19,6 +19,10 @@ pub struct Draft {
     pub key: String,
     pub master_lufs: f32,
     pub master_gain: f32,
+    /// ハネ具合 0〜1
+    pub swing: f32,
+    /// 何目盛りごとにハネるか
+    pub swing_grid: u32,
     pub sections: Vec<Section>,
 }
 
@@ -30,6 +34,8 @@ impl Draft {
             key: s.key.clone(),
             master_lufs: s.master_lufs,
             master_gain: s.master_gain,
+            swing: s.swing,
+            swing_grid: s.swing_grid.max(2),
             sections: s.sections.clone(),
         }
     }
@@ -89,6 +95,12 @@ impl Draft {
         if !(0.0..=4.0).contains(&self.master_gain) {
             return Err(format!("全体音量が {} です。0〜4 の間に", self.master_gain));
         }
+        if !(0.0..=1.0).contains(&self.swing) {
+            return Err(format!("ハネが {} です。0〜1 の間に", self.swing));
+        }
+        if !(1..=16).contains(&self.swing_grid) {
+            return Err(format!("ハネる刻みが {} です。1〜16 の間に", self.swing_grid));
+        }
         Ok(())
     }
 
@@ -105,6 +117,8 @@ impl Draft {
             master_lufs: Some(self.master_lufs),
             master_gain: Some(self.master_gain),
             sections: Some(self.sections.clone()),
+            swing: Some(self.swing),
+            swing_grid: Some(self.swing_grid),
         };
         let out = edit.apply(&src).map_err(|e| e.to_string())?;
         write_atomic(path, &out)
@@ -393,6 +407,39 @@ mod tests {
         assert_eq!(s.sections.len(), 2);
         assert_eq!(s.bars(), 4 + 8);
         assert_eq!(s.meter_at(5), Meter::new(7, 8));
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn swing_is_added_to_a_song_that_has_none() {
+        // 既にある曲ファイルには SWING が書かれていない。
+        // 「無いから書けません」では画面から触れない
+        let p = tmp_song("swing");
+        let before = std::fs::read_to_string(&p).unwrap();
+        assert!(!before.contains("SWING"), "元から書いてあった");
+
+        let mut d = Draft::from_song(&tonescript_song::load_file(&p).unwrap());
+        assert_eq!(d.swing, 0.0, "既定は均等");
+        d.swing = 0.6;
+        d.swing_grid = 2;
+        d.save(&p).expect("書けるはず");
+
+        let after = std::fs::read_to_string(&p).unwrap();
+        assert!(after.contains("let SWING = 0.6;"), "足されていない:
+{after}");
+        assert!(after.contains("// 説明。BPM の話も書いてある。"), "コメントが消えた");
+        let s = tonescript_song::load_file(&p).expect("読み直せるはず");
+        assert!((s.swing - 0.6).abs() < 1e-6);
+        assert_eq!(s.swing_grid, 2);
+
+        // 2回目は書き換え。行が増えない
+        let mut d = Draft::from_song(&s);
+        d.swing = 0.3;
+        d.save(&p).unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert_eq!(text.matches("let SWING =").count(), 1, "行が増えた:
+{text}");
+        assert!((tonescript_song::load_file(&p).unwrap().swing - 0.3).abs() < 1e-6);
         std::fs::remove_file(&p).ok();
     }
 

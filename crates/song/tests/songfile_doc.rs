@@ -520,6 +520,35 @@ fn the_ordinary_instruments_are_usable_by_name() {
 }
 
 #[test]
+fn the_swing_example_shapes_the_time_not_the_notes() {
+    // §7 に載せたハネの例。音符が動かないこと、曲の長さが変わらないこと
+    let head = r#"let BPM = 120;
+                  let SECTIONS = [["A", 2, "p", "k", "m", 1.0]];
+                  let VOICES = #{ lead: #{ ch: 0, patch: "piano" } };
+                  let MELODY = #{ "1": bar([[16, "A4"]]), "2": bar([[16, "C5"]]) };
+                  let ARRANGE = #{ "1": ["lead"], "2": ["lead"] };"#;
+    let straight = load(head);
+    let swung = load(&format!("{head}
+let SWING = 0.6;
+let SWING_GRID = 2;"));
+    assert_eq!(swung.swing, 0.6);
+    assert_eq!(swung.swing_grid, 2);
+
+    let a = tonescript_render::arrange::build(&straight).unwrap();
+    let b = tonescript_render::arrange::build(&swung).unwrap();
+    // 音符は1つも動かない
+    assert_eq!(a["lead"], b["lead"], "ハネで音符が動いた");
+
+    // 曲の長さも変わらない
+    let (ta, tb) =
+        (tonescript_render::arrange::step_times(&straight),
+         tonescript_render::arrange::step_times(&swung));
+    assert!((ta.last().unwrap() - tb.last().unwrap()).abs() < 1e-9, "曲の長さが変わった");
+    // でも刻みは変わっている
+    assert!((ta[1] - tb[1]).abs() > 1e-6, "何も変わっていない");
+}
+
+#[test]
 fn the_eq_example_loads_and_shapes() {
     // §8 に載せた EQ の例。読めて、値がそのまま入ること
     let s = load(

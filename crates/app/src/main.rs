@@ -996,6 +996,53 @@ impl App {
         self.touched();
     }
 
+    /// 選んでいるものを目盛りへ揃える。
+    fn quantize_sel(&mut self, strength: f32) {
+        if self.ed.sel.is_empty() {
+            self.status = "選んでいるものがありません".into();
+            return;
+        }
+        let total = self.song.as_ref().map(|s| s.total_steps()).unwrap_or(0);
+        let picked = self.ed.sel.clone();
+        let grid = self.ed.snap.max(1);
+        self.record(Tag::Once);
+        let done = match self.notes_for_edit() {
+            Some(ns) => sel::quantize(ns, &picked, grid, strength, total),
+            None => false,
+        };
+        if done {
+            self.status = format!(
+                "{} 個を {} 目盛りへ揃えました（{:.0}%）",
+                picked.len(),
+                grid,
+                strength * 100.0
+            );
+            self.touched();
+        } else {
+            self.status = "もう揃っています".into();
+        }
+    }
+
+    /// 選んでいるものの長さを目盛りへ揃える。
+    fn quantize_len_sel(&mut self) {
+        if self.ed.sel.is_empty() {
+            self.status = "選んでいるものがありません".into();
+            return;
+        }
+        let total = self.song.as_ref().map(|s| s.total_steps()).unwrap_or(0);
+        let picked = self.ed.sel.clone();
+        let grid = self.ed.snap.max(1);
+        self.record(Tag::Once);
+        let done = match self.notes_for_edit() {
+            Some(ns) => sel::quantize_len(ns, &picked, grid, total),
+            None => false,
+        };
+        if done {
+            self.status = format!("{} 個の長さを揃えました", picked.len());
+            self.touched();
+        }
+    }
+
     /// 選んでいるものの強さを、今の平均へ揃える。
     fn flatten_sel(&mut self) {
         if self.ed.sel.len() < 2 {
@@ -1666,6 +1713,58 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
                         }
                     }
                     ui.label(theme::dim("途中で変えるには TEMPO_MAP を書く"));
+                });
+                ui.end_row();
+
+                ui.label("ハネ");
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::Slider::new(&mut d.swing, 0.0..=1.0)
+                            .fixed_decimals(2)
+                            .custom_formatter(|v, _| {
+                                if v < 0.01 { "均等".into() } else { format!("{:.0}%", v * 100.0) }
+                            }),
+                    )
+                    .on_hover_text("0 で均等、1 で三連符の位置まで。音符は動かず、鳴り方だけ変わる");
+                    egui::ComboBox::from_id_salt("swing_grid")
+                        .selected_text(match d.swing_grid {
+                            1 => "16分",
+                            2 => "8分",
+                            4 => "4分",
+                            n => return ui.label(format!("{n} 目盛り")),
+                        })
+                        .show_ui(ui, |ui| {
+                            for (g, t) in [(1u32, "16分"), (2, "8分"), (4, "4分")] {
+                                ui.selectable_value(&mut d.swing_grid, g, t);
+                            }
+                        })
+                        .response
+                });
+                ui.end_row();
+
+                ui.label("ハネ");
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::Slider::new(&mut d.swing, 0.0..=1.0)
+                            .fixed_decimals(2)
+                            .custom_formatter(|v, _| {
+                                if v < 0.01 { "均等".into() } else { format!("{:.0}%", v * 100.0) }
+                            }),
+                    )
+                    .on_hover_text("0 で均等、1 で三連符の位置まで。音符は動かず、鳴り方だけ変わる");
+                    egui::ComboBox::from_id_salt("swing_grid")
+                        .selected_text(match d.swing_grid {
+                            1 => "16分",
+                            2 => "8分",
+                            4 => "4分",
+                            n => return ui.label(format!("{n} 目盛り")),
+                        })
+                        .show_ui(ui, |ui| {
+                            for (g, t) in [(1u32, "16分"), (2, "8分"), (4, "4分")] {
+                                ui.selectable_value(&mut d.swing_grid, g, t);
+                            }
+                        })
+                        .response
                 });
                 ui.end_row();
 
@@ -2501,6 +2600,26 @@ impl App {
             });
             ui.label(theme::dim("← → で動かす / ↑ ↓ で音程"))
                 .on_hover_text("↑↓ は半音ずつ。Shift を足すと1オクターブ");
+            ui.horizontal_wrapped(|ui| {
+                ui.label(theme::dim("位置"));
+                if ui
+                    .small_button("揃える")
+                    .on_hover_text("選んだものを「刻み」の目盛りへぴったり寄せる")
+                    .clicked()
+                {
+                    self.quantize_sel(1.0);
+                }
+                if ui
+                    .small_button("半分")
+                    .on_hover_text("半分だけ寄せる。弾いたノリを残したいとき")
+                    .clicked()
+                {
+                    self.quantize_sel(0.5);
+                }
+                if ui.small_button("長さも").on_hover_text("長さを目盛りへ揃える").clicked() {
+                    self.quantize_len_sel();
+                }
+            });
             ui.horizontal_wrapped(|ui| {
                 ui.label(theme::dim("強さ"));
                 if ui

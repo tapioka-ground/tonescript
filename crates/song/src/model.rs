@@ -342,6 +342,12 @@ pub struct Song {
     pub extra_hits: HashMap<String, (u8, Vec<Hit>)>,
 
     pub voices: HashMap<String, Voice>,
+    /// ハネ具合 0〜1。0 で均等、1 で三連符の位置まで。
+    /// **音符は動かさない。時間の刻み方を変える**ので、打ち込んだ譜面は
+    /// そのままで、鳴り方だけが変わる
+    pub swing: f32,
+    /// 何目盛りごとにハネるか。2 なら8分、4 なら4分
+    pub swing_grid: u32,
     /// 曲ファイルで作った音色。内蔵の46種と同じように使える。
     /// 同じ名前なら**こちらが勝つ**（内蔵を上書きして作り替えられる）
     pub patches: HashMap<String, tonescript_dsp::recipe::Recipe>,

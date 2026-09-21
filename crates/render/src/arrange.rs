@@ -81,7 +81,19 @@ pub fn step_times(song: &Song) -> Vec<f64> {
             Err(k) => k as u32,
         };
         let per_beat = song.meter_at(bar).steps_per_beat() as f64;
-        t += 60.0 / *b as f64 / per_beat;
+        let mut step = 60.0 / *b as f64 / per_beat;
+        // ハネ。**音符は動かさず、目盛りの長さを変える。**
+        //
+        // 2つで1組にして、前を伸ばし後ろを縮める。合計は変えないので、
+        // 小節の長さもテンポも変わらない。深さ1で前:後ろ = 2:1（三連符）
+        if song.swing > 0.0 {
+            let g = song.swing_grid.max(1) as usize;
+            let bar_start = starts.get(bar as usize - 1).copied().unwrap_or(0) as usize;
+            let into = i.saturating_sub(bar_start) % (g * 2);
+            let d = (song.swing.clamp(0.0, 1.0) / 3.0) as f64;
+            step *= if into < g { 1.0 + d } else { 1.0 - d };
+        }
+        t += step;
         out.push(t);
     }
     out
@@ -280,6 +292,97 @@ pub fn patch_for(song: &Song, part: &str, bar: u32) -> Option<String> {
         }
     }
     song.voices.get(part).and_then(|v| v.patch.clone())
+}
+
+#[cfg(test)]
+mod swing_tests {
+    use super::*;
+
+    fn song(extra: &str) -> Song {
+        let src = format!(
+            r#"let BPM = 120;
+               let SECTIONS = [["A", 2, "p", "k", "m", 1.0]];
+               let VOICES = #{{ lead: #{{ ch: 0, patch: "piano" }} }};
+               {extra}"#
+        );
+        tonescript_song::load_str(&src).expect("読めるはず")
+    }
+
+    #[test]
+    fn straight_stays_even() {
+        let t = step_times(&song(""));
+        // 120BPM の16分 = 0.125 秒。どれも同じ長さ
+        for i in 0..16 {
+            let d = t[i + 1] - t[i];
+            assert!((d - 0.125).abs() < 1e-9, "{i} 番目が {d} 秒");
+        }
+    }
+
+    #[test]
+    fn swing_stretches_the_first_of_each_pair() {
+        let t = step_times(&song("let SWING = 1.0;"));
+        // 8分でハネる（既定 SWING_GRID = 2）。
+        // 前2目盛りが伸びて、後ろ2目盛りが縮む
+        let first = t[2] - t[0];
+        let second = t[4] - t[2];
+        assert!(first > second, "前 {first} / 後ろ {second}（ハネていない）");
+        // 深さ1 で 2:1（三連符）
+        let ratio = first / second;
+        assert!((ratio - 2.0).abs() < 0.01, "比が {ratio}（2 のはず）");
+    }
+
+    #[test]
+    fn swing_does_not_change_the_length_of_the_song() {
+        // **ここが肝。** 伸ばしたぶんと縮めたぶんが釣り合っていないと、
+        // ハネただけで曲が伸び縮みしてテンポが狂う
+        let straight = step_times(&song(""));
+        for depth in ["0.3", "0.6", "1.0"] {
+            let swung = step_times(&song(&format!("let SWING = {depth};")));
+            let (a, b) = (*straight.last().unwrap(), *swung.last().unwrap());
+            assert!((a - b).abs() < 1e-9, "深さ {depth} で長さが {a} -> {b}");
+        }
+    }
+
+    #[test]
+    fn each_bar_starts_on_time() {
+        // 小節の頭がずれると、他のパートと合わなくなる
+        let s = song("let SWING = 1.0;");
+        let t = step_times(&s);
+        let straight = step_times(&song(""));
+        for bar in s.bar_starts() {
+            let i = bar as usize;
+            assert!(
+                (t[i] - straight[i]).abs() < 1e-9,
+                "{i} 目盛り（小節の頭）が {} -> {}",
+                straight[i],
+                t[i]
+            );
+        }
+    }
+
+    #[test]
+    fn a_coarser_grid_swings_bigger_units() {
+        // SWING_GRID = 4 なら4分でハネる。最初の4目盛りが伸びる
+        let t = step_times(&song("let SWING = 1.0; let SWING_GRID = 4;"));
+        let first = t[4] - t[0];
+        let second = t[8] - t[4];
+        assert!((first / second - 2.0).abs() < 0.01, "比が {}", first / second);
+        // 8分の位置では割れていない（4目盛りの中は均等）
+        assert!((t[1] - t[0] - (t[2] - t[1])).abs() < 1e-9, "組の中で長さが違う");
+    }
+
+    #[test]
+    fn a_silly_swing_is_refused() {
+        for bad in ["let SWING = 2.0;", "let SWING = -0.5;", "let SWING_GRID = 99;"] {
+            let src = format!(
+                r#"let BPM = 120;
+                   let SECTIONS = [["A", 1, "p", "k", "m", 1.0]];
+                   let VOICES = #{{ lead: #{{ ch: 0, patch: "piano" }} }};
+                   {bad}"#
+            );
+            assert!(tonescript_song::load_str(&src).is_err(), "通った: {bad}");
+        }
+    }
 }
 
 #[cfg(test)]
