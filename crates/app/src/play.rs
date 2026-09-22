@@ -73,7 +73,11 @@ pub struct Out {
 }
 
 impl Out {
-    /// 音の出口を開けて、ミキサーを繋ぐ。
+    /// 何も頼まずに開ける。**試験用。**
+    ///
+    /// 道具のほうは必ず設定を添えて開ける（[`Out::open_with`]）ので、
+    /// ここを通るのは試験だけ
+    #[cfg(test)]
     pub fn start(mixer: Mixer) -> Out {
         Out::open_with(mixer, &Prefs::default())
     }
