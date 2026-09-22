@@ -2,8 +2,8 @@
 
 A DAW whose project file is text. 135 instruments, zero samples. Free, MIT.
 
-Piano roll with a velocity lane, mixer with EQ, compression, group buses
-and meters,
+Arrangement view of the whole song, piano roll with a velocity lane,
+mixer with EQ, compression, group buses and meters,
 automation,
 undo, autosave, MIDI files in and out.
 Plug in a MIDI keyboard and play it. Record audio through a mic,
@@ -153,7 +153,8 @@ make with it, nor any samples or voice banks you supply.
 
 プロジェクトファイルがテキストの DAW。楽器135種、音源ゼロ。無料・MIT。
 
-ピアノロール（強さのレーン付き）、EQ とコンプとバスと針の付いたミキサー、
+曲まるごとを見渡すアレンジビュー、ピアノロール（強さのレーン付き）、
+EQ とコンプとバスと針の付いたミキサー、
 オートメーション、取り消し、自動保存、MIDI の読み書き。
 MIDI 鍵盤を挿せば弾ける。マイクから歌も録れる（メトロノームとカウントイン付き）。
 置いた音はその場で鳴る。作り直して鳴らすのではなく、鳴らしながら作っている。

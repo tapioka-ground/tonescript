@@ -266,6 +266,15 @@ fn encode(p: &Project) -> Value {
         takes.insert(name, one);
     }
     root.insert("takes", takes);
+
+    let mut arrange = Value::obj();
+    for (bar, parts) in &p.arrange {
+        arrange.insert(
+            &bar.to_string(),
+            Value::Arr(parts.iter().map(|s| s.as_str().into()).collect()),
+        );
+    }
+    root.insert("arrange", arrange);
     root.insert("muted", Value::Arr(p.muted.iter().map(|s| s.as_str().into()).collect()));
     root.insert("soloed", Value::Arr(p.soloed.iter().map(|s| s.as_str().into()).collect()));
     root
@@ -435,6 +444,19 @@ fn decode(v: &Value) -> Result<Project, String> {
                     duck: num("duck", 0.0, 2.0, 0.0),
                 },
             );
+        }
+    }
+    if let Some(m) = v.get("arrange").and_then(|x| x.as_obj()) {
+        for (bar, list) in m {
+            // 小節は 1 から。読めない鍵は捨てる（壊れた行で全部を落とさない）
+            let Ok(n) = bar.parse::<u32>() else { continue };
+            if n == 0 {
+                continue;
+            }
+            let Some(parts) = list.as_arr() else { continue };
+            let names: Vec<String> =
+                parts.iter().filter_map(|x| x.as_str()).map(String::from).collect();
+            p.arrange.insert(n, names);
         }
     }
     if let Some(m) = v.get("takes").and_then(|x| x.as_obj()) {
@@ -697,6 +719,38 @@ mod tests {
         assert_eq!(b.gain, 8.0, "音量が範囲外のまま");
         assert_eq!(b.pan, -1.0);
         assert_eq!(b.reverb, 2.0);
+    }
+
+    #[test]
+    fn the_arrangement_survives_a_save() {
+        let d = tmpdir("arrange");
+        let s = Store::new(&d, "example");
+        let mut p = Project::new("example");
+        p.arrange.insert(3, vec!["lead".into(), "bass".into()]);
+        // 「この小節は全部黙る」も覚えておけること。
+        // 空を落としてしまうと、黙らせた小節が次に開いたとき鳴り出す
+        p.arrange.insert(4, Vec::new());
+        s.save(&p).unwrap();
+        let back = s.load().unwrap().unwrap();
+        assert_eq!(back.arrange[&3], vec!["lead".to_string(), "bass".to_string()]);
+        assert_eq!(back.arrange[&4], Vec::<String>::new(), "黙らせた小節が消えた");
+    }
+
+    #[test]
+    fn a_broken_bar_number_is_dropped_not_fatal() {
+        let d = tmpdir("arrangebad");
+        let s = Store::new(&d, "example");
+        let mut p = Project::new("example");
+        p.arrange.insert(2, vec!["lead".into()]);
+        s.save(&p).unwrap();
+        // 手で書き換えられていても、読めるものは読む
+        let path = s.main_path();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let text = text.replace("\"arrange\": {", "\"arrange\": {\"あ\": [\"lead\"], \"0\": [],");
+        std::fs::write(&path, text).unwrap();
+        let back = s.load().unwrap().unwrap();
+        assert_eq!(back.arrange.len(), 1, "読めない鍵まで入った");
+        assert_eq!(back.arrange[&2], vec!["lead".to_string()]);
     }
 
     #[test]

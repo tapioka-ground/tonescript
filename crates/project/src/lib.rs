@@ -47,6 +47,11 @@ pub struct Project {
     pub gains: HashMap<String, f32>,
     /// パート -> 広がり・残響の送り・ダッキング。曲ファイルの `MIX` を上書きする
     pub mix: HashMap<String, MixCfg>,
+    /// 小節 -> その小節で鳴らすパート。曲ファイルの `ARRANGE` を上書きする。
+    ///
+    /// **小節まるごと差し替える。** パート単位で足し引きを覚えると、
+    /// 曲ファイルを直したときに、消したはずのパートが戻ってくる
+    pub arrange: HashMap<u32, Vec<String>>,
     /// バス名 -> その設定。曲ファイルの `BUSES` を上書きする。
     /// **バスそのものを増やすのは曲ファイル側の仕事**（ここは設定だけ）
     pub buses: HashMap<String, BusCfg>,
@@ -69,6 +74,33 @@ impl Project {
             return self.soloed.iter().any(|p| p == part);
         }
         !self.muted.iter().any(|p| p == part)
+    }
+
+    /// その小節でそのパートが鳴るか。上書きがあればそちらが勝つ。
+    ///
+    /// `song` 側の答えを渡してもらう形にしてある。曲を知らないここで
+    /// 「上書きが無ければ false」にすると、触っていない小節が全部黙る
+    pub fn plays(&self, bar: u32, part: &str, in_song: bool) -> bool {
+        match self.arrange.get(&bar) {
+            Some(v) => v.iter().any(|p| p == part),
+            None => in_song,
+        }
+    }
+
+    /// その小節でそのパートを鳴らすかどうかを決める。
+    ///
+    /// 上書きがまだ無ければ、まず曲ファイルの通りに写してから触る。
+    /// いきなり1つだけ書くと、その小節の他のパートが全部消える
+    pub fn set_plays(&mut self, bar: u32, part: &str, on: bool, now: &[String]) {
+        let v = self.arrange.entry(bar).or_insert_with(|| now.to_vec());
+        let at = v.iter().position(|p| p == part);
+        match (on, at) {
+            (true, None) => v.push(part.to_string()),
+            (false, Some(i)) => {
+                v.remove(i);
+            }
+            _ => {}
+        }
     }
 
     /// 手で置いた音符があるパートか。
@@ -107,6 +139,7 @@ impl Project {
             && self.automation.is_empty()
             && self.gains.is_empty()
             && self.mix.is_empty()
+            && self.arrange.is_empty()
             && self.buses.is_empty()
             && self.takes.is_empty()
             && self.muted.is_empty()
@@ -182,6 +215,40 @@ mod tests {
         p.overlay(&mut score);
         assert!(score.contains_key("lead"));
         assert!(!score.contains_key("bass"), "黙らせたパートが残っている");
+    }
+
+    #[test]
+    fn an_untouched_bar_follows_the_song_file() {
+        let p = Project::new("x");
+        // 上書きが無いうちは、曲ファイルの答えをそのまま返すこと。
+        // ここで false を返すと、触っていない小節まで全部黙る
+        assert!(p.plays(1, "lead", true));
+        assert!(!p.plays(1, "lead", false));
+    }
+
+    #[test]
+    fn touching_one_part_keeps_the_others_in_that_bar() {
+        let mut p = Project::new("x");
+        let now = vec!["lead".to_string(), "bass".to_string()];
+        // bass だけ黙らせる。lead は残ること
+        p.set_plays(3, "bass", false, &now);
+        assert!(p.plays(3, "lead", true), "触っていない lead まで消えた");
+        assert!(!p.plays(3, "bass", true));
+        // 足すほうも
+        p.set_plays(3, "arp", true, &now);
+        assert!(p.plays(3, "arp", false), "足したのに鳴らない");
+        // 同じことを二度やっても増えない
+        p.set_plays(3, "arp", true, &now);
+        assert_eq!(p.arrange[&3].iter().filter(|x| *x == "arp").count(), 1);
+    }
+
+    #[test]
+    fn a_bar_can_be_emptied_completely() {
+        let mut p = Project::new("x");
+        let now = vec!["lead".to_string()];
+        p.set_plays(2, "lead", false, &now);
+        assert!(p.arrange.contains_key(&2), "空にした覚えが残っていない");
+        assert!(!p.plays(2, "lead", true), "曲ファイル側が勝ってしまった");
     }
 
     #[test]

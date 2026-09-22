@@ -51,6 +51,21 @@ pub fn part_color(part: &str) -> Color32 {
     }
 }
 
+/// 区間の色。**隣が同じ色にならないように**、順ぐりに回す。
+///
+/// 区間の名前で決めると、A と A' が似た色になって境目が見えない
+pub fn section_color(i: usize) -> Color32 {
+    const WHEEL: [Color32; 6] = [
+        Color32::from_rgb(0x7f, 0xb3, 0xff),
+        Color32::from_rgb(0x8f, 0xdd, 0xa8),
+        Color32::from_rgb(0xff, 0xc8, 0x7a),
+        Color32::from_rgb(0xd5, 0xa8, 0xff),
+        Color32::from_rgb(0x8a, 0xe0, 0xe0),
+        Color32::from_rgb(0xff, 0xa8, 0xc0),
+    ];
+    WHEEL[i % WHEEL.len()]
+}
+
 pub fn head(t: &str) -> RichText {
     RichText::new(t).size(11.0).strong().color(DIM)
 }

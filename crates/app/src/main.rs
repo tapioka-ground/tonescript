@@ -22,6 +22,7 @@ mod mixer;
 mod rec;
 mod sel;
 mod newsong;
+mod arrange;
 mod prefs;
 mod play;
 mod settings;
@@ -68,6 +69,8 @@ enum Msg {
 enum Screen {
     /// 曲の一覧。開いたら最初に出る
     Browser,
+    /// 曲まるごとの眺め。縦にパート、横に小節
+    Arrange,
     /// ピアノロール
     Editor,
 }
@@ -168,6 +171,11 @@ struct App {
     audio_win: Option<play::Prefs>,
     /// 窓に出す機械の一覧。開くたびに数え直す（挿し替えられるので）
     audio_devices: Vec<String>,
+
+    /// アレンジビューの横の倍率（[`arrange::BAR_W`] の何番目か）
+    arr_zoom: usize,
+    /// アレンジビューで塗っている最中の覚え書き
+    arr_paint: arrange::Paint,
 }
 
 impl Default for App {
@@ -226,6 +234,8 @@ impl Default for App {
             prefs,
             audio_win: None,
             audio_devices: Vec::new(),
+            arr_zoom: 2,
+            arr_paint: arrange::Paint::default(),
             tune_error: None,
         };
         app.refresh_list();
@@ -537,6 +547,9 @@ impl App {
         }
         for (part, m) in &self.project.mix {
             song.mix.insert(part.clone(), m.clone());
+        }
+        for (bar, parts) in &self.project.arrange {
+            song.arrange.insert(*bar, parts.clone());
         }
         for (name, cfg) in &self.project.buses {
             // **曲ファイルに無いバスは足さない。** バスを増やすのは
@@ -1231,8 +1244,11 @@ impl App {
 
     /// 譜面を組み直す。曲ファイル + 手で触ったぶん。
     fn rebuild(&mut self) {
-        let Some(song) = &self.song else { return };
-        match build(song) {
+        // **書き出しと同じもの（merged_song）から組む。**
+        // ここだけ曲ファイルの素のままで組むと、どの小節で誰が鳴るかを
+        // 画面で触っても、聞こえ方だけ変わらない、ということになる
+        let Some(song) = self.merged_song() else { return };
+        match build(&song) {
             Ok(mut sc) => {
                 self.project.overlay(&mut sc);
                 self.score = Some(sc);
@@ -1508,6 +1524,12 @@ impl eframe::App for App {
         self.tabs(ctx);
         if self.screen == Screen::Browser {
             self.browser_screen(ctx);
+            return;
+        }
+        if self.screen == Screen::Arrange {
+            self.top_bar(ctx);
+            self.bottom_bar(ctx);
+            self.arrange_screen(ctx);
             return;
         }
         self.top_bar(ctx);
@@ -2197,6 +2219,16 @@ impl App {
                     self.refresh_list();
                     self.screen = Screen::Browser;
                 }
+                if ui
+                    .add_enabled(
+                        self.song.is_some(),
+                        egui::SelectableLabel::new(self.screen == Screen::Arrange, "アレンジ"),
+                    )
+                    .on_hover_text("曲まるごとの眺め。どの小節で誰が鳴るか")
+                    .clicked()
+                {
+                    self.screen = Screen::Arrange;
+                }
                 let can_edit = self.song.is_some() || self.error.is_some();
                 let label = match &self.picked {
                     Some(n) if can_edit => format!("編集 — {n}"),
@@ -2222,6 +2254,80 @@ impl App {
     }
 
     /// 曲の一覧。開いたら最初に出る画面。
+    /// アレンジビュー。
+    fn arrange_screen(&mut self, ctx: &egui::Context) {
+        let Some(song) = self.song.clone() else { return };
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(theme::head("アレンジ"));
+                ui.label(theme::dim(&format!(
+                    "{}小節 / {}区間",
+                    song.bars(),
+                    song.sections.len()
+                )));
+                ui.separator();
+                if ui.small_button("−").on_hover_text("横に縮める").clicked() {
+                    self.arr_zoom = self.arr_zoom.saturating_sub(1);
+                }
+                if ui.small_button("＋").on_hover_text("横に広げる").clicked() {
+                    self.arr_zoom = (self.arr_zoom + 1).min(arrange::BAR_W.len() - 1);
+                }
+                ui.separator();
+                if self.loop_range.is_some() && ui.small_button("繰り返しを解く").clicked() {
+                    self.loop_range = None;
+                    self.engine.set_loop(0, 0);
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(theme::dim(
+                        "四角を押すとその小節で鳴る／黙る。引きずれば塗れる。                         上の帯を二度押しでその区間を繰り返す",
+                    ));
+                });
+            });
+            ui.separator();
+
+            let bar_w = arrange::BAR_W[self.arr_zoom.min(arrange::BAR_W.len() - 1)];
+            let t = egui::ScrollArea::horizontal()
+                .show(ui, |ui| {
+                    arrange::panel(
+                        ui,
+                        &song,
+                        &self.project,
+                        self.head,
+                        self.loop_range,
+                        bar_w,
+                        &mut self.arr_paint,
+                    )
+                })
+                .inner;
+
+            if let Some(at) = t.seek_to {
+                self.head = at;
+                self.engine.seek(self.sample_of(at));
+            }
+            if let Some((a, b)) = t.loop_set {
+                self.loop_range = Some((a, b));
+                self.engine.set_loop(self.sample_of(a), self.sample_of(b));
+            }
+            if t.loop_clear {
+                self.loop_range = None;
+                self.engine.set_loop(0, 0);
+            }
+            if !t.plays.is_empty() {
+                // 引きずっている間は1段にまとめる。離すまでで1回の取り消し
+                self.history.record(&self.project, Tag::Curve("arrange".into(), "plays"));
+                for (bar, part, on) in t.plays {
+                    // 上書きがまだ無ければ、曲ファイルの通りを写してから触る
+                    let now: Vec<String> =
+                        song.arrange.get(&bar).cloned().unwrap_or_default();
+                    self.project.set_plays(bar, &part, on, &now);
+                }
+                self.saver.touched();
+                self.rebuild();
+                self.push_to_engine();
+            }
+        });
+    }
+
     fn browser_screen(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.add_space(10.0);
@@ -3077,6 +3183,20 @@ fn _keep(s: &Song) {
 mod tests {
     use super::*;
 
+    /// 試験は crates/app の中で走るので、そのままだと `songs` が見つからず、
+    /// **曲が1つも無い環境として素通りしてしまう。**
+    ///
+    /// 置き場を教えてやる。書き出し先は捨てて良い所へ向ける
+    fn use_repo_songs() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..");
+        std::env::set_var("TONESCRIPT_SONGS", root.join("songs"));
+        let mut tmp = std::env::temp_dir();
+        tmp.push(format!("tonescript_app_test_{}", std::process::id()));
+        std::env::set_var("TONESCRIPT_ROOT", &tmp);
+    }
+
     /// 開いたら必ず曲一覧から始まること。
     ///
     /// 前に開いた曲をいきなり出すと、どれを触っているのか分からないまま
@@ -3089,6 +3209,51 @@ mod tests {
         assert!(app.song.is_none(), "勝手に曲が読まれている");
         // 未保存も、直したことになっていないこと
         assert!(!app.saver.is_dirty());
+    }
+
+    /// アレンジビューで黙らせたら、**本当に音符が消えること。**
+    ///
+    /// 見た目の四角が消えるだけで譜面が変わらない、というのが一番まずい。
+    /// 画面と、鳴る音と、書き出しが同じものを見ていることを確かめる
+    #[test]
+    fn silencing_a_bar_in_the_arrangement_actually_removes_the_notes() {
+        use_repo_songs();
+        let mut app = App::default();
+        let first = app.entries.first().map(|e| e.name.clone()).expect("曲が読めない");
+        app.open_song(&first);
+        let song = app.song.clone().expect("曲が読めている");
+        let score = app.score.clone().expect("譜面が組めている");
+
+        // 1小節目で鳴っているパートを1つ探す
+        let part = song
+            .edit_parts
+            .iter()
+            .find(|p| song.plays(1, p) && score.get(*p).is_some_and(|v| !v.is_empty()))
+            .cloned()
+            .expect("1小節目で鳴るパートが1つも無い");
+        let before = score.get(&part).map(|v| v.len()).unwrap_or(0);
+        let end = song.bar_start(2);
+        let in_bar1 = |sc: &Score| {
+            sc.get(&part).map(|v| v.iter().filter(|n| n.pos < end).count()).unwrap_or(0)
+        };
+        assert!(in_bar1(&score) > 0, "{part} の1小節目に音符が無い");
+
+        // 黙らせる
+        let now: Vec<String> = song.arrange.get(&1).cloned().unwrap_or_default();
+        app.project.set_plays(1, &part, false, &now);
+        app.rebuild();
+        let after = app.score.clone().expect("組み直せる");
+        assert_eq!(in_bar1(&after), 0, "黙らせたのに1小節目の音符が残っている");
+        assert!(
+            after.get(&part).map(|v| v.len()).unwrap_or(0) < before,
+            "音符の数が減っていない"
+        );
+
+        // 戻せば戻ること
+        app.project.set_plays(1, &part, true, &now);
+        app.rebuild();
+        let back = app.score.clone().expect("組み直せる");
+        assert!(in_bar1(&back) > 0, "戻したのに鳴らない");
     }
 
     /// 曲を開いたら編集の画面へ移り、閉じ損ねの確認も効くこと。
