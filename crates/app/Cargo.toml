@@ -10,6 +10,11 @@ license.workspace = true
 name = "tone-app"
 path = "src/main.rs"
 
+[features]
+# Windows で遅れを詰めたいとき。ASIO SDK と LLVM が要るので既定では入れない
+# （入れていない機械ではビルドすら通らない）。README の「低遅延」を見ること
+asio = ["cpal/asio"]
+
 [dependencies]
 eframe = { version = "0.29", default-features = false, features = ["default_fonts", "glow"] }
 egui = "0.29"

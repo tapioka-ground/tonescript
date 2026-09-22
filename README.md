@@ -48,6 +48,28 @@ tone patches  [song]    list instruments (plus the song's own)
 | `TONESCRIPT_SONGS` | where songs live | `songs` |
 | `TONESCRIPT_ROOT` | where output goes | `out` |
 
+### Low latency
+
+**Audio settings** in the toolbar picks the output, and shows the block size
+the device actually hands us — not the one we asked for. That block is most
+of the delay between pressing a key and hearing it.
+
+On Windows the default path is WASAPI shared, and it decides the block size
+itself. On the machine this was written on it gives 1056 frames (22 ms) and
+ignores anything smaller. That is the floor; asking for 64 changes nothing.
+
+To go below it you need ASIO:
+
+```
+set CPAL_ASIO_DIR=C:\path\to\asiosdk
+cargo build --release --features asio
+```
+
+It needs the [ASIO SDK](https://www.steinberg.net/developer/) and LLVM
+(bindgen). Neither ships with the build, which is why it is off by default —
+with the feature on and the SDK missing, the build fails. Once it is in,
+`ASIO` appears in the host list and the block size is yours to choose.
+
 ## What's inside
 
 ```
@@ -170,6 +192,28 @@ tone patches  [曲]      音色の一覧（曲が作った音色も）
 |---|---|---|
 | `TONESCRIPT_SONGS` | 曲の置き場 | `songs` |
 | `TONESCRIPT_ROOT` | 書き出し先 | `out` |
+
+### 低遅延
+
+上の「音の出口」で、どの機械で鳴らすかと塊の大きさを選ぶ。画面に出るのは
+**実際に来た塊**で、頼んだ値ではない。鍵盤を押してから音が出るまでの遅れは、
+ほとんどがこの塊で決まる。
+
+Windows の既定の口（WASAPI の共有）は、塊を自分で決める。これを書いた機械
+では 1056 サンプル（22ms）で、それより小さい頼みは聞かない。そこが底で、
+64 を頼んでも何も変わらない。
+
+そこから下げるには ASIO が要る。
+
+```
+set CPAL_ASIO_DIR=C:\ASIO SDK の場所
+cargo build --release --features asio
+```
+
+[ASIO SDK](https://www.steinberg.net/developer/) と LLVM（bindgen が使う）が
+要る。どちらも同梱できないので既定では入れていない。**SDK が無いまま
+この feature を付けるとビルドが通らない。** 入れてしまえば口の一覧に `ASIO`
+が出てきて、塊を自分で選べるようになる。
 
 ## 何が入っているか
 

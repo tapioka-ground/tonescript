@@ -22,6 +22,7 @@ mod mixer;
 mod rec;
 mod sel;
 mod newsong;
+mod prefs;
 mod play;
 mod settings;
 mod theme;
@@ -160,13 +161,21 @@ struct App {
     tuning: Option<settings::Draft>,
     /// 設定の窓に出す注意書き
     tune_error: Option<String>,
+
+    /// この機械の設定（音の口など）。曲とは別に持つ
+    prefs: prefs::Prefs,
+    /// 音の口を選ぶ窓。開いていれば Some（いじっている途中の値）
+    audio_win: Option<play::Prefs>,
+    /// 窓に出す機械の一覧。開くたびに数え直す（挿し替えられるので）
+    audio_devices: Vec<String>,
 }
 
 impl Default for App {
     fn default() -> Self {
         // 鳴らす側と、音の出口。出口が開かなくても engine は動く
         let (engine, mixer) = Engine::new();
-        let out = play::Out::start(mixer);
+        let prefs = prefs::Prefs::load(&out_dir());
+        let out = play::Out::open_with(mixer, &prefs.audio);
         let mut app = Self {
             screen: Screen::Browser,
             entries: Vec::new(),
@@ -214,6 +223,9 @@ impl Default for App {
             making: None,
             make_error: None,
             tuning: None,
+            prefs,
+            audio_win: None,
+            audio_devices: Vec::new(),
             tune_error: None,
         };
         app.refresh_list();
@@ -709,6 +721,28 @@ impl App {
         }
         self.in_ports = rec::Rec::ports();
         self.in_ports_at = Some(std::time::Instant::now());
+    }
+
+    /// 音の出口を開け直す。
+    ///
+    /// 機械を替えるには、口を閉じて開け直すしかない。ミキサーは口の中へ
+    /// 渡しきってあるので取り返せず、**鳴らす側ごと作り直す**。
+    /// 曲・音量・ループ・位置は持ち物から戻せるので、見た目には
+    /// 「鳴っていたのが止まって、開き直る」だけになる。
+    fn reopen_audio(&mut self) {
+        let click = self.engine.click();
+        // 先に新しいのを作り、口を閉じてから古い係を落とす。
+        // 逆にすると、係がいないのに口だけ開いている一瞬ができる
+        let (engine, mixer) = Engine::new();
+        self.out = play::Out::open_with(mixer, &self.prefs.audio);
+        self.engine = engine;
+        self.engine.set_click(click);
+        self.push_to_engine();
+        self.load_audio();
+        self.status = match &self.out.error {
+            Some(e) => format!("音の出口が開きません: {e}"),
+            None => format!("音の出口: {} / {}", self.out.host, self.out.device),
+        };
     }
 
     /// 今の譜面と設定を鳴らす側へ渡す。
@@ -1467,6 +1501,9 @@ impl eframe::App for App {
         if self.tuning.is_some() {
             settings_window(ctx, self);
         }
+        if self.audio_win.is_some() {
+            audio_window(ctx, self);
+        }
 
         self.tabs(ctx);
         if self.screen == Screen::Browser {
@@ -1925,6 +1962,166 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
     }
 }
 
+/// 音の出口を選ぶ窓。
+///
+/// **今どうなっているか**を先に出す。遅れは頼んだ値ではなく、実際に来た
+/// 塊から出す。頼みが通らない口があるので、頼んだ値を出すと嘘になる。
+fn audio_window(ctx: &egui::Context, app: &mut App) {
+    let mut open = true;
+    let mut apply = false;
+    let mut d = app.audio_win.clone().unwrap_or_default();
+    let hosts = play::hosts();
+
+    egui::Window::new("音の出口")
+        .open(&mut open)
+        .resizable(false)
+        .collapsible(false)
+        .show(ctx, |ui| {
+            // -- 今の状態
+            if let Some(e) = &app.out.error {
+                ui.colored_label(theme::RED, format!("開いていません: {e}"));
+            } else {
+                ui.label(theme::dim(&format!("いま: {} / {}", app.out.host, app.out.device)));
+                let rate = format!("{:.1}kHz", app.out.sample_rate as f32 / 1000.0);
+                match app.out.latency_ms() {
+                    Some(ms) => {
+                        let n = app.out.frames().unwrap_or(0);
+                        ui.label(format!("{rate}・{n} サンプル = 遅れ {ms:.1}ms"));
+                        if app.out.asked != 0 && app.out.asked != n {
+                            // 頼みが通っていない。黙っていると、つまみが
+                            // 効かない道具だと思われる
+                            ui.colored_label(
+                                theme::ORANGE,
+                                format!(
+                                    "{} を頼みましたが {n} で開いています（この口は塊を選べません）",
+                                    app.out.asked
+                                ),
+                            );
+                        }
+                    }
+                    None => {
+                        ui.label(format!("{rate}・まだ鳴らしていないので遅れは測れていません"));
+                    }
+                }
+            }
+            if let Some(n) = &app.out.note {
+                ui.colored_label(theme::ORANGE, n);
+            }
+            ui.separator();
+
+            // -- 口
+            ui.horizontal(|ui| {
+                ui.label("口");
+                egui::ComboBox::from_id_salt("audio_host")
+                    .selected_text(if d.host.is_empty() { "おまかせ" } else { &d.host })
+                    .width(200.0)
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_label(d.host.is_empty(), "おまかせ").clicked() {
+                            d.host.clear();
+                            d.device.clear();
+                            app.audio_devices = play::devices("");
+                        }
+                        for h in &hosts {
+                            if ui.selectable_label(&d.host == h, h).clicked() {
+                                d.host = h.clone();
+                                // 口が変われば機械の一覧も変わる。
+                                // 前の口の機械名を持ち越すと、開くたびに既定へ落ちる
+                                d.device.clear();
+                                app.audio_devices = play::devices(h);
+                            }
+                        }
+                    });
+            });
+            if !hosts.iter().any(|h| h == "ASIO") {
+                ui.label(theme::dim(
+                    "ASIO はこのビルドに入っていません（README の「低遅延」を）",
+                ));
+            }
+
+            // -- 機械
+            ui.horizontal(|ui| {
+                ui.label("機械");
+                egui::ComboBox::from_id_salt("audio_device")
+                    .selected_text(if d.device.is_empty() { "おまかせ" } else { &d.device })
+                    .width(200.0)
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_label(d.device.is_empty(), "おまかせ").clicked() {
+                            d.device.clear();
+                        }
+                        for name in &app.audio_devices {
+                            if ui.selectable_label(&d.device == name, name).clicked() {
+                                d.device = name.clone();
+                            }
+                        }
+                    });
+            });
+
+            // -- 塊
+            ui.horizontal(|ui| {
+                ui.label("塊");
+                let label = |n: u32| {
+                    if n == 0 {
+                        "おまかせ".to_string()
+                    } else {
+                        format!("{n} ({:.1}ms)", n as f32 * 1000.0 / app.out.sample_rate.max(1) as f32)
+                    }
+                };
+                egui::ComboBox::from_id_salt("audio_buffer")
+                    .selected_text(label(d.buffer))
+                    .width(200.0)
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_label(d.buffer == 0, "おまかせ").clicked() {
+                            d.buffer = 0;
+                        }
+                        for n in play::Prefs::SIZES {
+                            if ui.selectable_label(d.buffer == n, label(n)).clicked() {
+                                d.buffer = n;
+                            }
+                        }
+                    });
+            });
+            ui.label(theme::dim(
+                "小さいほど鍵盤を押してから音が出るまでが速くなります。
+                 小さすぎると間に合わずにプツプツ鳴るので、鳴ったら一段大きく。
+                 Windows の既定の口（WASAPI 共有）は塊を自分で決めるので、
+                 頼んでも変わらないことがあります（上に実際の値が出ます）",
+            ));
+
+            ui.separator();
+            ui.horizontal(|ui| {
+                let changed = d != app.prefs.audio;
+                if ui
+                    .add_enabled(changed, egui::Button::new("開け直す"))
+                    .on_hover_text("鳴っていれば一度止まります")
+                    .clicked()
+                {
+                    apply = true;
+                }
+                if ui.button("閉じる").clicked() {
+                    app.audio_win = None;
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(theme::dim("この機械だけの設定です。曲には入りません"));
+                });
+            });
+        });
+
+    if app.audio_win.is_some() {
+        app.audio_win = Some(d.clone());
+    }
+    if apply {
+        app.prefs.audio = d;
+        if let Err(e) = app.prefs.save(&out_dir()) {
+            app.status = format!("設定を書けませんでした: {e}");
+        }
+        app.reopen_audio();
+        app.audio_win = None;
+    }
+    if !open {
+        app.audio_win = None;
+    }
+}
+
 /// 決まった名前から選ぶ。曲ファイルに書いていないものを選ぶと鳴らないので。
 fn pick(
     ui: &mut egui::Ui,
@@ -2237,6 +2434,14 @@ impl App {
                             self.tuning = Some(settings::Draft::from_song(song));
                             self.tune_error = None;
                         }
+                    }
+                    if ui
+                        .button("音の出口")
+                        .on_hover_text("どの機械で鳴らすか・塊の大きさ（押してから音が出るまでの遅れ）")
+                        .clicked()
+                    {
+                        self.audio_devices = play::devices(&self.prefs.audio.host);
+                        self.audio_win = Some(self.prefs.audio.clone());
                     }
                     ui.separator();
                     let playing = self.engine.is_playing();
