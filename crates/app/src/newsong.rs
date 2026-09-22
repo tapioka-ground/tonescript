@@ -134,6 +134,12 @@ pub fn build(spec: &Spec) -> String {
     let _ = writeln!(s, "    [\"サビ\",     {bars}, \"octa\",  \"full\",  \"high\", 1.00{meter_suffix}],");
     let _ = writeln!(s, "];");
     let _ = writeln!(s);
+    let _ = writeln!(s, "// 全部で何小節か。**SECTIONS から数える。**");
+    let _ = writeln!(s, "// ここに数を直接書くと、区間を伸ばしたときに和音も編成も付いてこず、");
+    let _ = writeln!(s, "// 増えた小節だけ何も鳴らない、という分かりにくいことになる。");
+    let _ = writeln!(s, "let total_bars = 0;");
+    let _ = writeln!(s, "for sec in SECTIONS {{ total_bars += sec[1]; }}");
+    let _ = writeln!(s);
 
     // --- 和音。i-VI-III-VII を回す
     let _ = writeln!(s, "// [表示名, [構成音...], ベースの音]");
@@ -144,7 +150,7 @@ pub fn build(spec: &Spec) -> String {
     let _ = writeln!(s, "// i-VI-III-VII。解決しないので何周でも回せる、定番の並び。");
     let _ = writeln!(s, "let prog = [Am, F, C, G];");
     let _ = writeln!(s, "let CHORDS = #{{}};");
-    let _ = writeln!(s, "for i in steps(0, {}, 1) {{", bars * 2);
+    let _ = writeln!(s, "for i in steps(0, total_bars, 1) {{");
     let _ = writeln!(s, "    CHORDS[\"\" + (i + 1)] = prog[i % prog.len()];");
     let _ = writeln!(s, "}}");
     let _ = writeln!(s);
@@ -165,7 +171,7 @@ pub fn build(spec: &Spec) -> String {
     let _ = writeln!(s, "// どの小節で何を鳴らすか。ここに無いパートはその小節で黙る。");
     let _ = writeln!(s, "let parts = {parts};");
     let _ = writeln!(s, "let ARRANGE = #{{}};");
-    let _ = writeln!(s, "for i in steps(1, {}, 1) {{", bars * 2 + 1);
+    let _ = writeln!(s, "for i in steps(1, total_bars + 1, 1) {{");
     let _ = writeln!(s, "    ARRANGE[\"\" + i] = parts;");
     let _ = writeln!(s, "}}");
     let _ = writeln!(s);
@@ -347,6 +353,40 @@ mod tests {
             assert_eq!(s.bars(), bars * 2);
             tonescript_render::build(&s).unwrap_or_else(|e| panic!("{bars}小節で組めない: {e}"));
         }
+    }
+
+    /// **区間を伸ばしたら、伸びたぶんも鳴ること。**
+    ///
+    /// 雛形が小節数を数字で焼き込んでいると、「曲の設定」で区間を伸ばした
+    /// とき SECTIONS だけが書き換わって、和音も編成も付いてこない。
+    /// 増えた小節が無音になり、しかも理由が画面のどこにも出ない
+    #[test]
+    fn making_a_section_longer_fills_the_new_bars() {
+        let text = build(&Spec::default());
+        let before = tonescript_song::load_str(&text).expect("読めるはず");
+        assert_eq!(before.bars(), 16);
+
+        // イントロを 8 から 24 小節へ。設定の窓がするのと同じ書き換え
+        let longer = text.replace(
+            r#"["イントロ", 8, "plain", "light", "main", 0.85],"#,
+            r#"["イントロ", 24, "plain", "light", "main", 0.85],"#,
+        );
+        assert_ne!(longer, text, "書き換えられていない（雛形の形が変わった？）");
+        let after = tonescript_song::load_str(&longer).expect("伸ばしても読めるはず");
+        assert_eq!(after.bars(), 32);
+
+        // 増えた所に和音があり、編成にも載っていること
+        for bar in [9u32, 20, 32] {
+            assert!(after.chords.contains_key(&bar), "{bar}小節目に和音が無い");
+            assert!(after.plays(bar, "bass"), "{bar}小節目が編成に無い");
+        }
+        // そして本当に音符が出ること
+        let score = tonescript_render::build(&after).expect("組めるはず");
+        let last = after.bar_start(32);
+        assert!(
+            score["bass"].iter().any(|n| n.pos >= last),
+            "伸ばした最後の小節で伴奏が鳴らない"
+        );
     }
 
     #[test]
