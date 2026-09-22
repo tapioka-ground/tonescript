@@ -14,6 +14,9 @@ No plugins, no sample libraries. A 34-second track renders in 0.24s.
 
 The song is plain text, so you can write it by hand — or hand
 [SONGFILE.md](SONGFILE.md) to an AI and have it write it for you.
+**Edit the file while the app is open and it reloads itself**, keeping the
+edits you made in the GUI — so you can keep asking for changes without
+closing anything.
 **The instruments are text too**, so an AI can design the sounds, not just
 the notes. Guitars and basses are modelled strings, not sampled ones.
 
@@ -165,6 +168,8 @@ MIDI 鍵盤を挿せば弾ける。マイクから歌も録れる（メトロノ
 曲はただのテキストなので、手で書いてもいいし、
 [SONGFILE.ja.md](SONGFILE.ja.md) を AI に渡して書かせてもいい。
 **音色もテキスト**なので、曲だけでなく音そのものを作らせられる。
+**開いたまま書き換えれば読み直す**ので、画面で触ったぶんを残したまま、
+何度でも書き直させられる。
 ギターやベースは録った音ではなく、弦そのものを計算している。
 
 ## すぐ試す

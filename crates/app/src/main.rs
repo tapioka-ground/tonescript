@@ -40,6 +40,11 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::Arc;
 
+/// 曲ファイルの更新時刻。読めなければ `None`。
+fn song_mtime(path: &Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
 fn songs_dir() -> PathBuf {
     std::env::var("TONESCRIPT_SONGS").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("songs"))
 }
@@ -176,6 +181,16 @@ struct App {
     arr_zoom: usize,
     /// アレンジビューで塗っている最中の覚え書き
     arr_paint: arrange::Paint,
+
+    /// 今読んである曲ファイルの更新時刻
+    song_seen: Option<std::time::SystemTime>,
+    /// 変わったのは見えたが、まだ読んでいない更新時刻。
+    /// **書いている途中を掴まないための待ち。** 次に見たときも同じなら読む
+    song_pending: Option<std::time::SystemTime>,
+    /// 前に見に行った時刻
+    watch_at: Option<std::time::Instant>,
+    /// 外で直されたら読み直すか
+    watch_on: bool,
 }
 
 impl Default for App {
@@ -236,6 +251,10 @@ impl Default for App {
             audio_devices: Vec::new(),
             arr_zoom: 2,
             arr_paint: arrange::Paint::default(),
+            song_seen: None,
+            song_pending: None,
+            watch_at: None,
+            watch_on: true,
             tune_error: None,
         };
         app.refresh_list();
@@ -326,6 +345,8 @@ impl App {
             }
         }
         self.taking.clear();
+        self.song_seen = song_mtime(&path);
+        self.song_pending = None;
         self.rebuild();
         self.push_to_engine();
         self.load_audio();
@@ -734,6 +755,92 @@ impl App {
         }
         self.in_ports = rec::Rec::ports();
         self.in_ports_at = Some(std::time::Instant::now());
+    }
+
+    /// 曲ファイルを読み直す。**編集したぶんは残す。**
+    ///
+    /// [`App::open`] との違いはそこ。あちらは開き直しなので、手で置いた
+    /// 音符も取り消しの履歴も捨てる。外で直されただけなら、捨てる理由がない。
+    ///
+    /// 読めなければ**今の曲をそのまま残す**。書いている途中を掴んだだけの
+    /// ことがあるし、そこで曲を落とすと、鳴らしている音まで止まる
+    fn reload_song(&mut self) {
+        let Some(name) = self.picked.clone() else { return };
+        let path = songs_dir().join(format!("{name}.rhai"));
+        let song = match tonescript_song::load_file(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                self.status = format!("[!] {name}.rhai が変わりましたが読めません: {e}");
+                return;
+            }
+        };
+        if !song.edit_parts.contains(&self.ed.part) {
+            if let Some(p) = song.edit_parts.first() {
+                self.ed.part = p.clone();
+            }
+        }
+        let bars = song.bars();
+        self.song = Some(song);
+        self.step_times = self
+            .song
+            .as_ref()
+            .map(tonescript_render::arrange::step_times)
+            .unwrap_or_default();
+        // 曲が短くなっていたら、頭を中へ戻す
+        let end = self.step_times.len().saturating_sub(1) as f32;
+        self.head = self.head.min(end);
+        if let Some((a, b)) = self.loop_range {
+            if b > end {
+                self.loop_range = None;
+                self.engine.set_loop(0, 0);
+            } else {
+                let _ = a;
+            }
+        }
+        self.error = None;
+        self.rebuild();
+        self.push_to_engine();
+        self.load_audio();
+        self.status = format!("{name}.rhai が変わったので読み直しました（{bars}小節）");
+    }
+
+    /// 曲ファイルが外で直されていないか、たまに見に行く。
+    ///
+    /// AI やエディタに書かせたものが、**道具を開き直さずに出てくる**ように。
+    /// 開き直しを要ることにすると、書かせては閉じて開いて、を繰り返す
+    fn watch_song(&mut self, ctx: &egui::Context) {
+        if !self.watch_on {
+            return;
+        }
+        // いつでも見に行けるよう、少しずつ起こしてもらう
+        ctx.request_repaint_after(std::time::Duration::from_millis(400));
+        let now = std::time::Instant::now();
+        if let Some(t) = self.watch_at {
+            if now.duration_since(t) < std::time::Duration::from_millis(400) {
+                return;
+            }
+        }
+        self.watch_at = Some(now);
+
+        // 一覧を見ているときは、曲が増えた・減ったのも拾う
+        if self.screen == Screen::Browser {
+            self.refresh_list();
+        }
+
+        let Some(name) = self.picked.clone() else { return };
+        let path = songs_dir().join(format!("{name}.rhai"));
+        let Some(mt) = song_mtime(&path) else { return };
+        if Some(mt) == self.song_seen {
+            return;
+        }
+        // **1回見えただけでは読まない。** 次も同じ時刻なら、書き終わっている
+        if self.song_pending == Some(mt) {
+            self.song_seen = Some(mt);
+            self.song_pending = None;
+            self.reload_song();
+        } else {
+            self.song_pending = Some(mt);
+        }
     }
 
     /// 音の出口を開け直す。
@@ -1450,6 +1557,7 @@ impl eframe::App for App {
         self.pump();
         self.pump_keys();
         self.tick_autosave();
+        self.watch_song(ctx);
         // 針を進める。前のフレームからの時間で落とす
         let now = std::time::Instant::now();
         let dt = self.last_frame.map(|t| now.duration_since(t).as_secs_f32()).unwrap_or(0.016);
@@ -2542,6 +2650,20 @@ impl App {
                         }
                     }
                     if ui
+                        .selectable_label(self.watch_on, "外の変更を見る")
+                        .on_hover_text(
+                            "曲ファイルが外で直されたら読み直します。
+                             AI やエディタに書かせたものが、開き直さずに出てきます",
+                        )
+                        .clicked()
+                    {
+                        self.watch_on = !self.watch_on;
+                        // 切ったあとに直されたぶんは、入れ直した時点から見る
+                        if self.watch_on {
+                            self.song_pending = None;
+                        }
+                    }
+                    if ui
                         .button("音の出口")
                         .on_hover_text("どの機械で鳴らすか・塊の大きさ（押してから音が出るまでの遅れ）")
                         .clicked()
@@ -3187,6 +3309,16 @@ mod tests {
     /// **曲が1つも無い環境として素通りしてしまう。**
     ///
     /// 置き場を教えてやる。書き出し先は捨てて良い所へ向ける
+    /// **試験は1つずつ走らせる。**
+    ///
+    /// 曲の置き場を環境変数で渡しているので、同時に走らせると、隣の試験が
+    /// 別の置き場を指してしまう
+    static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn solo() -> std::sync::MutexGuard<'static, ()> {
+        ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn use_repo_songs() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")
@@ -3217,6 +3349,7 @@ mod tests {
     /// 画面と、鳴る音と、書き出しが同じものを見ていることを確かめる
     #[test]
     fn silencing_a_bar_in_the_arrangement_actually_removes_the_notes() {
+        let _one = solo();
         use_repo_songs();
         let mut app = App::default();
         let first = app.entries.first().map(|e| e.name.clone()).expect("曲が読めない");
@@ -3256,9 +3389,71 @@ mod tests {
         assert!(in_bar1(&back) > 0, "戻したのに鳴らない");
     }
 
+    /// 外で直された曲ファイルが、**開き直さずに出てくること。**
+    ///
+    /// AI やエディタに書かせるのがこの道具の使い方なので、そのたびに
+    /// 開き直させると、書かせては閉じて開いて、の繰り返しになる
+    #[test]
+    fn a_song_edited_outside_comes_back_without_reopening() {
+        let _one = solo();
+        // 書き換えられる置き場を用意して、そこを見せる
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("tonescript_watch_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+        let text = std::fs::read_to_string(repo.join("songs").join("example.rhai")).unwrap();
+        let path = dir.join("watched.rhai");
+        std::fs::write(&path, &text).unwrap();
+        std::env::set_var("TONESCRIPT_SONGS", &dir);
+        let mut tmp = std::env::temp_dir();
+        tmp.push(format!("tonescript_watch_out_{}", std::process::id()));
+        std::env::set_var("TONESCRIPT_ROOT", &tmp);
+
+        let mut app = App::default();
+        app.open_song("watched");
+        let before = app.song.as_ref().expect("開けている").bpm;
+
+        // 手で置いた音符。**読み直しても残ること**
+        app.project.add_note(
+            "lead",
+            tonescript_song::model::Note {
+                pos: 0,
+                len: 4,
+                pitch: 72,
+                vel: 100,
+                mora: String::new(),
+            },
+        );
+
+        // 外で BPM を書き換える
+        let changed = text.replace("let BPM = 128;", "let BPM = 96;");
+        assert_ne!(changed, text, "書き換えられていない（見本の形が変わった？）");
+        std::fs::write(&path, &changed).unwrap();
+
+        app.reload_song();
+        let after = app.song.as_ref().expect("読み直せている").bpm;
+        assert_eq!(after, 96.0, "外の直しが出てこない（前は {before}）");
+        assert!(app.project.notes.contains_key("lead"), "手で置いた音符が消えた");
+
+        // 壊れたものを掴んでも、今の曲は残ること
+        std::fs::write(&path, "let BPM = ").unwrap();
+        app.reload_song();
+        assert_eq!(
+            app.song.as_ref().expect("曲が落ちた").bpm,
+            96.0,
+            "読めないファイルで今の曲まで落ちた"
+        );
+        assert!(app.status.contains("読めません"), "理由が出ていない: {}", app.status);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// 曲を開いたら編集の画面へ移り、閉じ損ねの確認も効くこと。
     #[test]
     fn opening_a_song_moves_to_the_editor() {
+        let _one = solo();
+        use_repo_songs();
         let mut app = App::default();
         // 一覧に何か在れば、それを開ける
         let Some(first) = app.entries.first().map(|e| e.name.clone()) else {
