@@ -635,7 +635,7 @@ fn the_compressor_evens_out_the_level_while_it_plays() {
     e.set_master_gain(0.05);
     settle();
 
-    let mut take = |e: &mut Engine, m: &mut Mixer| -> Vec<f32> {
+    let take = |e: &mut Engine, m: &mut Mixer| -> Vec<f32> {
         e.seek(0);
         std::thread::sleep(Duration::from_millis(250));
         e.play();
@@ -880,4 +880,135 @@ fn correlation(a: &[f32], b: &[f32]) -> f32 {
         return 0.0;
     }
     (num / (da.sqrt() * db.sqrt())) as f32
+}
+
+/// バスを通す曲。パート全部を1本のバスへまとめる。
+fn bused_song() -> (Arc<Song>, Arc<arrange::Score>) {
+    let src = format!(
+        r#"{SRC}
+           let BUSES = #{{ g: #{{ label: "全部" }} }};
+           let MIX = #{{
+               lead:  #{{ bus: "g" }},
+               bass:  #{{ bus: "g" }},
+               drums: #{{ bus: "g" }},
+           }};"#
+    );
+    let s = tonescript_song::load_str(&src).expect("曲が読めない");
+    let score = arrange::build(&s).expect("譜面が組めない");
+    (Arc::new(s), Arc::new(score))
+}
+
+/// 音圧の測り直しが終わるのを待つ。終わる前に測ると、途中で倍率が
+/// 変わって、こちらが触ったぶんと区別がつかなくなる
+fn wait_makeup(e: &Engine) {
+    let t0 = Instant::now();
+    while e.makeup() == 1.0 && t0.elapsed() < Duration::from_secs(20) {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    settle();
+}
+
+#[test]
+fn the_bus_fader_is_heard_while_it_plays() {
+    let _one = solo();
+    let (s, sc) = bused_song();
+    let (mut e, mut m) = Engine::new();
+    e.set_song(s, sc);
+    wait_makeup(&e);
+    // **天井に当てない。** 当たると絞ったぶんが埋もれる
+    e.set_master_gain(0.05);
+    settle();
+
+    let take = |e: &mut Engine, m: &mut Mixer| -> Vec<f32> {
+        e.seek(0);
+        std::thread::sleep(Duration::from_millis(250));
+        e.play();
+        let (l, _) = pull(m, 30, 1024, Duration::from_millis(3));
+        e.stop();
+        l
+    };
+    let open = take(&mut e, &mut m);
+    assert!(rms(&open) > 1e-4, "バス経由で音が出ていない");
+
+    let d = tonescript_song::model::BusCfg::default();
+    e.set_bus("g", tonescript_song::model::BusCfg { gain: 0.5, ..d.clone() });
+    settle();
+    let half = take(&mut e, &mut m);
+    let db = 20.0 * (rms(&half) / rms(&open).max(1e-9)).log10();
+    assert!((db + 6.02).abs() < 0.5, "半分にして {db:+.2}dB（-6 のはず）");
+
+    // 0 にすれば、そこへ来ているパートは全部黙る
+    e.set_bus("g", tonescript_song::model::BusCfg { gain: 0.0, ..d });
+    settle();
+    let shut = take(&mut e, &mut m);
+    assert!(rms(&shut) < rms(&open) * 0.01, "バスを閉じても鳴っている");
+}
+
+#[test]
+fn the_bus_eq_is_heard_while_it_plays() {
+    let _one = solo();
+    let (s, sc) = bused_song();
+    let (mut e, mut m) = Engine::new();
+    e.set_song(s, sc);
+    wait_makeup(&e);
+
+    e.play();
+    let (flat, _) = pull(&mut m, 30, 1024, Duration::from_millis(3));
+    e.stop();
+    e.seek(0);
+
+    // バス1本を削るだけで、そこへ来ているパート全部に効くこと
+    let mut cfg = tonescript_song::model::BusCfg::default();
+    cfg.eq.high = -24.0;
+    e.set_bus("g", cfg);
+    settle();
+    e.play();
+    let (dull, _) = pull(&mut m, 30, 1024, Duration::from_millis(3));
+    e.stop();
+
+    // 高い帯だけ取り出す。ハイパスは4段（1段では緩すぎて差が埋もれる）
+    let highs = |x: &[f32]| -> f32 {
+        let mut b = x.to_vec();
+        for _ in 0..4 {
+            b = tonescript_dsp::filter::highpass(&b, 6000.0);
+        }
+        rms(&b)
+    };
+    let db = 20.0 * (highs(&dull) / highs(&flat).max(1e-12)).log10();
+    assert!(db < -10.0, "バスの EQ が {db:+.1}dB しか効いていない");
+}
+
+#[test]
+fn a_bused_song_is_heard_the_way_it_is_written() {
+    let _one = solo();
+    // **バスを足しても、この約束は崩さない。**
+    // 書き出しと再生で別の道を通ると、混ぜ終わってから音が変わる
+    let (s, sc) = bused_song();
+
+    let quiet = |_: &str| {};
+    let mut stems = tonescript_render::render_stems(&s, &sc, &quiet);
+    let mut off = tonescript_render::mix_down(&s, &mut stems, &sc, &quiet);
+    tonescript_render::master(&mut off, s.master_lufs, &quiet);
+
+    let (mut e, mut m) = Engine::new();
+    e.set_song(s.clone(), sc.clone());
+    let t0 = Instant::now();
+    while t0.elapsed() < Duration::from_secs(20) {
+        std::thread::sleep(Duration::from_millis(50));
+        if e.plan().total > 0 {
+            break;
+        }
+    }
+    std::thread::sleep(Duration::from_millis(400));
+    e.play();
+    let blocks = (e.total() as usize / 1024) + 2;
+    let (rl, rr) = pull(&mut m, blocks, 1024, Duration::from_millis(3));
+
+    let n = off.l.len().min(rl.len());
+    assert!(n > SR as usize, "短すぎる: {n}");
+    let skip = (0.1 * SR) as usize;
+    let corr = correlation(&off.l[skip..n], &rl[skip..n]);
+    assert!(corr > 0.97, "バス経由で形が違う（相関 {corr:.4}）");
+    let corr_r = correlation(&off.r[skip..n], &rr[skip..n]);
+    assert!(corr_r > 0.97, "右の形が違う（相関 {corr_r:.4}）");
 }

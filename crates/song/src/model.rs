@@ -123,8 +123,11 @@ pub struct Voice {
 }
 
 /// パートごとのミックス設定。
-#[derive(PartialEq, Clone, Copy, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub struct MixCfg {
+    /// どのバスへ送るか。`None` ならマスターへ直接。
+    /// **バスは入れ子にしない**（環になると止まらなくなる）
+    pub bus: Option<String>,
     /// 左右の広がり。0 = 完全中央
     pub width: f32,
     /// 左右の位置。-1 が左、0 が中央、+1 が右。
@@ -143,6 +146,7 @@ pub struct MixCfg {
 impl Default for MixCfg {
     fn default() -> Self {
         Self {
+            bus: None,
             width: 0.0,
             pan: 0.0,
             eq: tonescript_dsp::eq::EqCfg::default(),
@@ -314,6 +318,39 @@ pub type Hit = (u32, u8);
 /// ドラムキット。パート名 -> (MIDIノート番号, 打点)
 pub type Kit = HashMap<String, (u8, Vec<Hit>)>;
 
+/// バス1本ぶん。パートをまとめて、そこで整えてから master へ送る。
+///
+/// ドラムを1本のフェーダーで扱う、まとめて押さえる、まとめて残響へ送る、
+/// といったことができる。パートに掛かるのと同じ道具が並ぶ。
+#[derive(PartialEq, Clone, Debug)]
+pub struct BusCfg {
+    /// 画面に出す名前
+    pub label: String,
+    pub gain: f32,
+    /// -1 が左、+1 が右
+    pub pan: f32,
+    pub eq: tonescript_dsp::eq::EqCfg,
+    pub comp: tonescript_dsp::comp::CompCfg,
+    /// 残響へ送る量
+    pub reverb: f32,
+    /// サイドチェインの掛かり具合
+    pub duck: f32,
+}
+
+impl Default for BusCfg {
+    fn default() -> Self {
+        Self {
+            label: String::new(),
+            gain: 1.0,
+            pan: 0.0,
+            eq: Default::default(),
+            comp: Default::default(),
+            reverb: 0.0,
+            duck: 0.0,
+        }
+    }
+}
+
 /// 曲まるごと。
 #[derive(Clone, Debug, Default)]
 pub struct Song {
@@ -349,6 +386,8 @@ pub struct Song {
     pub extra_hits: HashMap<String, (u8, Vec<Hit>)>,
 
     pub voices: HashMap<String, Voice>,
+    /// バス。名前順で並べたいので BTreeMap
+    pub buses: std::collections::BTreeMap<String, BusCfg>,
     /// ハネ具合 0〜1。0 で均等、1 で三連符の位置まで。
     /// **音符は動かさない。時間の刻み方を変える**ので、打ち込んだ譜面は
     /// そのままで、鳴り方だけが変わる

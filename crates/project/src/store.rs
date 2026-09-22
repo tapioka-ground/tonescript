@@ -224,30 +224,32 @@ fn encode(p: &Project) -> Value {
     let mut mix = Value::obj();
     for (part, m) in &p.mix {
         let mut one = Value::obj();
+        if let Some(b) = &m.bus {
+            one.insert("bus", b.as_str().into());
+        }
         one.insert("width", m.width.into());
         one.insert("pan", m.pan.into());
         one.insert("reverb", m.reverb.into());
         one.insert("duck", m.duck.into());
-        let mut e = Value::obj();
-        e.insert("low", m.eq.low.into());
-        e.insert("mid", m.eq.mid.into());
-        e.insert("high", m.eq.high.into());
-        e.insert("low_hz", m.eq.low_hz.into());
-        e.insert("mid_hz", m.eq.mid_hz.into());
-        e.insert("mid_q", m.eq.mid_q.into());
-        e.insert("high_hz", m.eq.high_hz.into());
-        one.insert("eq", e);
-        let mut c = Value::obj();
-        c.insert("threshold", m.comp.threshold.into());
-        c.insert("ratio", m.comp.ratio.into());
-        c.insert("attack", m.comp.attack.into());
-        c.insert("release", m.comp.release.into());
-        c.insert("knee", m.comp.knee.into());
-        c.insert("makeup", m.comp.makeup.into());
-        one.insert("comp", c);
+        one.insert("eq", eq_value(&m.eq));
+        one.insert("comp", comp_value(&m.comp));
         mix.insert(part, one);
     }
     root.insert("mix", mix);
+
+    let mut buses = Value::obj();
+    for (name, b) in &p.buses {
+        let mut one = Value::obj();
+        one.insert("label", b.label.as_str().into());
+        one.insert("gain", b.gain.into());
+        one.insert("pan", b.pan.into());
+        one.insert("reverb", b.reverb.into());
+        one.insert("duck", b.duck.into());
+        one.insert("eq", eq_value(&b.eq));
+        one.insert("comp", comp_value(&b.comp));
+        buses.insert(name, one);
+    }
+    root.insert("buses", buses);
 
     let mut takes = Value::obj();
     for (name, t) in &p.takes {
@@ -267,6 +269,31 @@ fn encode(p: &Project) -> Value {
     root.insert("muted", Value::Arr(p.muted.iter().map(|s| s.as_str().into()).collect()));
     root.insert("soloed", Value::Arr(p.soloed.iter().map(|s| s.as_str().into()).collect()));
     root
+}
+
+/// 音の整えを JSON へ。読む側は [`read_eq`]。
+fn eq_value(e: &tonescript_dsp::eq::EqCfg) -> Value {
+    let mut v = Value::obj();
+    v.insert("low", e.low.into());
+    v.insert("mid", e.mid.into());
+    v.insert("high", e.high.into());
+    v.insert("low_hz", e.low_hz.into());
+    v.insert("mid_hz", e.mid_hz.into());
+    v.insert("mid_q", e.mid_q.into());
+    v.insert("high_hz", e.high_hz.into());
+    v
+}
+
+/// 押さえ込みを JSON へ。読む側は [`read_comp`]。
+fn comp_value(c: &tonescript_dsp::comp::CompCfg) -> Value {
+    let mut v = Value::obj();
+    v.insert("threshold", c.threshold.into());
+    v.insert("ratio", c.ratio.into());
+    v.insert("attack", c.attack.into());
+    v.insert("release", c.release.into());
+    v.insert("knee", c.knee.into());
+    v.insert("makeup", c.makeup.into());
+    v
 }
 
 /// 保存した音の整えを読む。範囲外は引き戻す。
@@ -380,7 +407,27 @@ fn decode(v: &Value) -> Result<Project, String> {
             p.mix.insert(
                 part.clone(),
                 MixCfg {
+                    bus: one.get("bus").and_then(|x| x.as_str()).map(String::from),
                     width: num("width", 0.0, 4.0, 0.0),
+                    pan: num("pan", -1.0, 1.0, 0.0),
+                    eq: read_eq(one),
+                    comp: read_comp(one),
+                    reverb: num("reverb", 0.0, 2.0, 0.0),
+                    duck: num("duck", 0.0, 2.0, 0.0),
+                },
+            );
+        }
+    }
+    if let Some(m) = v.get("buses").and_then(|x| x.as_obj()) {
+        for (name, one) in m {
+            let num = |k: &str, lo: f32, hi: f32, dflt: f32| -> f32 {
+                one.get(k).and_then(|x| x.as_f64()).map(|v| (v as f32).clamp(lo, hi)).unwrap_or(dflt)
+            };
+            p.buses.insert(
+                name.clone(),
+                tonescript_song::model::BusCfg {
+                    label: one.get("label").and_then(|x| x.as_str()).unwrap_or_default().to_string(),
+                    gain: num("gain", 0.0, 8.0, 1.0),
                     pan: num("pan", -1.0, 1.0, 0.0),
                     eq: read_eq(one),
                     comp: read_comp(one),
@@ -554,7 +601,7 @@ mod tests {
         s.save(&p).unwrap();
         let back = s.load().unwrap().expect("あるはず");
         assert_eq!(back.mix.len(), 2);
-        let lead = back.mix["lead"];
+        let lead = back.mix["lead"].clone();
         assert!((lead.width - 1.35).abs() < 1e-6, "広がりが {}", lead.width);
         assert!((lead.reverb - 0.26).abs() < 1e-6);
         assert!((lead.duck - 0.55).abs() < 1e-6);
@@ -602,10 +649,54 @@ mod tests {
         p.mix.insert("lead".into(), MixCfg { width: 99.0, reverb: -5.0, duck: 50.0, ..Default::default() });
         s.save(&p).unwrap();
         let back = s.load().unwrap().unwrap();
-        let m = back.mix["lead"];
+        let m = back.mix["lead"].clone();
         assert_eq!(m.width, 4.0, "広がりが範囲外のまま");
         assert_eq!(m.reverb, 0.0);
         assert_eq!(m.duck, 2.0);
+    }
+
+    #[test]
+    fn the_bus_settings_survive_a_save() {
+        let d = tmpdir("buses");
+        let s = Store::new(&d, "example");
+        let mut p = Project::new("example");
+        let mut cfg = tonescript_song::model::BusCfg {
+            label: "ドラム".into(),
+            gain: 0.7,
+            pan: -0.25,
+            reverb: 0.3,
+            duck: 0.4,
+            ..Default::default()
+        };
+        cfg.eq.low = 3.5;
+        cfg.eq.high = -2.0;
+        cfg.comp.ratio = 4.0;
+        cfg.comp.threshold = -20.0;
+        p.buses.insert("drumbus".into(), cfg.clone());
+        s.save(&p).unwrap();
+        let back = s.load().unwrap().unwrap();
+        assert_eq!(back.buses["drumbus"], cfg, "バスの設定が戻らない");
+    }
+
+    #[test]
+    fn an_out_of_range_bus_is_pulled_back_not_trusted() {
+        let d = tmpdir("busbad");
+        let s = Store::new(&d, "example");
+        let mut p = Project::new("example");
+        p.buses.insert(
+            "g".into(),
+            tonescript_song::model::BusCfg {
+                gain: 99.0,
+                pan: -9.0,
+                reverb: 50.0,
+                ..Default::default()
+            },
+        );
+        s.save(&p).unwrap();
+        let b = s.load().unwrap().unwrap().buses["g"].clone();
+        assert_eq!(b.gain, 8.0, "音量が範囲外のまま");
+        assert_eq!(b.pan, -1.0);
+        assert_eq!(b.reverb, 2.0);
     }
 
     #[test]

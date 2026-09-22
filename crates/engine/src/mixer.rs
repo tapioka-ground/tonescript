@@ -195,6 +195,8 @@ pub const CLICK: usize = usize::MAX;
 const MAX_BLOCK: usize = 8192;
 /// パートの上限。針の数もこれに合わせる
 pub const MAX_PARTS: usize = 64;
+/// バスの上限。
+pub const MAX_BUSES: usize = 16;
 const MAX_VOICES: usize = 1024;
 
 /// 音を出す側。cpal の中へ丸ごと渡す。
@@ -232,6 +234,12 @@ pub struct Mixer {
     eq: Vec<tonescript_dsp::eq::Eq>,
     /// パートごとの押さえ込み。同じく状態を持つ
     comp: Vec<tonescript_dsp::comp::Comp>,
+    /// バスの置き場（左右）と、バスごとの整え・押さえ込み
+    bus_l: Vec<Vec<f32>>,
+    bus_r: Vec<Vec<f32>>,
+    bus_eq_l: Vec<tonescript_dsp::eq::Eq>,
+    bus_eq_r: Vec<tonescript_dsp::eq::Eq>,
+    bus_comp: Vec<tonescript_dsp::comp::Comp>,
     /// いま鳴っている音の数（画面に出す）
     live: Arc<AtomicU64>,
     /// 針
@@ -273,6 +281,11 @@ impl Mixer {
             audio: std::sync::Arc::new(Vec::new()),
             eq: vec![tonescript_dsp::eq::Eq::default(); MAX_PARTS],
             comp: vec![tonescript_dsp::comp::Comp::default(); MAX_PARTS],
+            bus_l: (0..MAX_BUSES).map(|_| vec![0.0; MAX_BLOCK]).collect(),
+            bus_r: (0..MAX_BUSES).map(|_| vec![0.0; MAX_BLOCK]).collect(),
+            bus_eq_l: vec![tonescript_dsp::eq::Eq::default(); MAX_BUSES],
+            bus_eq_r: vec![tonescript_dsp::eq::Eq::default(); MAX_BUSES],
+            bus_comp: vec![tonescript_dsp::comp::Comp::default(); MAX_BUSES],
             live,
             meters,
             loudness: crate::meter::Loudness::new(),
@@ -327,6 +340,12 @@ impl Mixer {
                         e.clear();
                     }
                     for c in self.comp.iter_mut() {
+                        c.clear();
+                    }
+                    for e in self.bus_eq_l.iter_mut().chain(self.bus_eq_r.iter_mut()) {
+                        e.clear();
+                    }
+                    for c in self.bus_comp.iter_mut() {
                         c.clear();
                     }
                     self.cursor.reset();
@@ -397,6 +416,15 @@ impl Mixer {
         }
         self.send[..n].fill(0.0);
         self.click[..n].fill(0.0);
+        let nb = plan.buses.len().min(MAX_BUSES);
+        for i in 0..nb {
+            if self.bus_l[i].len() < n {
+                self.bus_l[i].resize(n, 0.0);
+                self.bus_r[i].resize(n, 0.0);
+            }
+            self.bus_l[i][..n].fill(0.0);
+            self.bus_r[i][..n].fill(0.0);
+        }
         out_l[..n].fill(0.0);
         out_r[..n].fill(0.0);
 
@@ -522,8 +550,16 @@ impl Mixer {
                     l *= gl * std::f32::consts::SQRT_2;
                     r *= gr * std::f32::consts::SQRT_2;
                 }
-                out_l[i] += l * gain;
-                out_r[i] += r * gain;
+                match part.bus {
+                    Some(bi) if bi < nb => {
+                        self.bus_l[bi][i] += l * gain;
+                        self.bus_r[bi][i] += r * gain;
+                    }
+                    _ => {
+                        out_l[i] += l * gain;
+                        out_r[i] += r * gain;
+                    }
+                }
                 let seen = (l * gain).abs().max((r * gain).abs());
                 if seen > loudest {
                     loudest = seen;
@@ -536,6 +572,53 @@ impl Mixer {
         self.lane_a = from;
         self.lane_b = now;
         self.have_prev = true;
+
+        // バスを整えてマスターへ。パートと同じ道具が同じ順で掛かる
+        for bi in 0..nb {
+            let b = &plan.buses[bi].cfg;
+            let flat = b.eq.is_flat();
+            if !flat {
+                self.bus_eq_l[bi].set(b.eq);
+                self.bus_eq_r[bi].set(b.eq);
+            }
+            let no_comp = b.comp.is_off();
+            if !no_comp {
+                self.bus_comp[bi].set(b.comp);
+            }
+            let (gl, gr) = if b.pan != 0.0 {
+                let (a, c) = pan_gains(b.pan);
+                (a * std::f32::consts::SQRT_2, c * std::f32::consts::SQRT_2)
+            } else {
+                (1.0, 1.0)
+            };
+            for i in 0..n {
+                let mut l = self.bus_l[bi][i];
+                let mut r = self.bus_r[bi][i];
+                if !flat {
+                    l = self.bus_eq_l[bi].run(l);
+                    r = self.bus_eq_r[bi].run(r);
+                }
+                if !no_comp {
+                    // **左右で同じだけ押さえる。** 別々に掛けると、
+                    // 片方だけ潰れたときに音の位置が動く
+                    let mono = (l + r) * 0.5;
+                    let shaped = self.bus_comp[bi].run(mono);
+                    let k = if mono.abs() > 1e-9 { shaped / mono } else { 1.0 };
+                    l *= k;
+                    r *= k;
+                }
+                if b.duck > 0.0 {
+                    let k = 1.0 - (1.0 - self.duck.at(pos + i as u64)) * b.duck;
+                    l *= k;
+                    r *= k;
+                }
+                if b.reverb > 0.0 {
+                    self.send[i] += (l + r) * 0.5 * b.reverb;
+                }
+                out_l[i] += l * gl * b.gain;
+                out_r[i] += r * gr * b.gain;
+            }
+        }
 
         // 残響。集めた送りを1つの部屋へ通して戻す。
         // 送りが途切れても、尾が消えるまでは回し続ける
@@ -726,6 +809,7 @@ mod tests {
                 gain: 1.0,
                 mix: Default::default(),
                 audible: true,
+                bus: None,
                 gain_curve: None,
                 pan_curve: None,
                 reverb_curve: None,

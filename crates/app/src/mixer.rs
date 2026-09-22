@@ -22,7 +22,7 @@
 use egui::{Color32, Rect, Sense, Ui, Vec2};
 use tonescript_engine::Engine;
 use tonescript_project::Project;
-use tonescript_song::model::MixCfg;
+use tonescript_song::model::{BusCfg, MixCfg};
 use tonescript_song::Song;
 
 use crate::theme;
@@ -104,6 +104,8 @@ pub enum Edit {
     Gain { part: String, gain: f32 },
     /// 広がり・送り・凹み・音の整えを変えた
     Mix { part: String, mix: MixCfg },
+    /// バスの設定を変えた
+    Bus { name: String, cfg: BusCfg },
     /// 黙らせる／戻す
     Mute(String),
     /// これだけ鳴らす／戻す
@@ -170,6 +172,11 @@ pub fn panel(
         ui.horizontal(|ui| {
             for part in &parts {
                 strip(ui, song, project, needles, editing, part, &mut out);
+                ui.separator();
+            }
+            // バス。パートの右、全体の左に置く。信号の流れる順
+            for name in song.buses.keys() {
+                bus_strip(ui, song, project, name, &mut out);
                 ui.separator();
             }
             master_strip(ui, song, engine, needles);
@@ -258,8 +265,8 @@ fn strip(
     let mut mix = project
         .mix
         .get(part)
-        .copied()
-        .unwrap_or_else(|| song.mix.get(part).copied().unwrap_or_default());
+        .cloned()
+        .unwrap_or_else(|| song.mix.get(part).cloned().unwrap_or_default());
 
     ui.vertical(|ui| {
         ui.set_width(84.0);
@@ -309,8 +316,31 @@ fn strip(
             }
         });
 
-        // 広がり・送り・ダッキング
+        // 行き先。曲ファイルに BUSES があるときだけ出す
         let mut touched = false;
+        if !song.buses.is_empty() {
+            let now = mix.bus.clone();
+            let shown = now.clone().unwrap_or_else(|| "全体".to_string());
+            egui::ComboBox::from_id_salt(("bus", part))
+                .selected_text(theme::dim(&shown))
+                .width(72.0)
+                .show_ui(ui, |ui| {
+                    if ui.selectable_label(now.is_none(), "全体").clicked() {
+                        mix.bus = None;
+                        touched = true;
+                    }
+                    for b in song.buses.keys() {
+                        if ui.selectable_label(now.as_deref() == Some(b.as_str()), b).clicked() {
+                            mix.bus = Some(b.clone());
+                            touched = true;
+                        }
+                    }
+                })
+                .response
+                .on_hover_text("まとめて扱うバス。ここを通してから全体へ出る");
+        }
+
+        // 広がり・送り・ダッキング
         // 左右。-1〜1 なので、他のつまみと別に書く
         touched |= pan_row(ui, &mut mix.pan);
 
@@ -331,7 +361,68 @@ fn strip(
             touched |= db_row(ui, "戻", &mut mix.comp.makeup, "押さえたぶんを持ち上げる");
         }
         if touched {
-            out.push(Edit::Mix { part: part.to_string(), mix });
+            out.push(Edit::Mix { part: part.to_string(), mix: mix.clone() });
+        }
+    });
+}
+
+/// バス1本ぶん。
+///
+/// パートの短冊とほぼ同じつまみが並ぶ。**同じ道具が同じ順で掛かる**ので、
+/// パートで覚えたことがそのまま通じる。
+fn bus_strip(ui: &mut Ui, song: &Song, project: &Project, name: &str, out: &mut Vec<Edit>) {
+    // 触っていなければ曲ファイルの値
+    let mut cfg = project
+        .buses
+        .get(name)
+        .cloned()
+        .unwrap_or_else(|| song.buses.get(name).cloned().unwrap_or_default());
+    // ここへ来ているパートの数。0 なら、送り先の指定を忘れている合図
+    let n = song
+        .edit_parts
+        .iter()
+        .filter(|p| {
+            let m = project.mix.get(*p).or_else(|| song.mix.get(*p));
+            m.and_then(|m| m.bus.as_deref()) == Some(name)
+        })
+        .count();
+
+    ui.vertical(|ui| {
+        ui.set_width(84.0);
+        ui.horizontal(|ui| {
+            let (rect, _) = ui.allocate_exact_size(Vec2::splat(9.0), Sense::hover());
+            ui.painter().rect_filled(rect, 2.0, theme::DIM);
+            let label = if cfg.label.is_empty() { name.to_string() } else { cfg.label.clone() };
+            ui.label(theme::head(&label)).on_hover_text(format!("バス {name}"));
+        });
+        ui.label(theme::dim(&if n == 0 {
+            "来ていません".to_string()
+        } else {
+            format!("{n} パート")
+        }));
+
+        let mut touched = false;
+        let r = ui.add(
+            egui::Slider::new(&mut cfg.gain, 0.0..=4.0).vertical().show_value(false).step_by(0.01),
+        );
+        touched |= r.changed();
+        ui.label(theme::dim(&format!("{:.2}", cfg.gain)));
+
+        touched |= pan_row(ui, &mut cfg.pan);
+        touched |= knob(ui, "残", &mut cfg.reverb, 2.0, "バスまとめて残響へ送る量");
+        touched |= knob(ui, "凹", &mut cfg.duck, 2.0, "キックのたびに凹む量（バスまとめて）");
+        ui.add_space(2.0);
+        touched |= db_row(ui, "低", &mut cfg.eq.low, "200Hz から下。バスに来ているパート全部に効く");
+        touched |= db_row(ui, "中", &mut cfg.eq.mid, "1kHz のあたり");
+        touched |= db_row(ui, "高", &mut cfg.eq.high, "4kHz から上");
+        ui.add_space(2.0);
+        touched |= ratio_row(ui, &mut cfg.comp.ratio);
+        if cfg.comp.ratio > 1.001 {
+            touched |= db_row(ui, "閾", &mut cfg.comp.threshold, "ここを越えたぶんを押さえる");
+            touched |= db_row(ui, "戻", &mut cfg.comp.makeup, "押さえたぶんを持ち上げる");
+        }
+        if touched {
+            out.push(Edit::Bus { name: name.to_string(), cfg: cfg.clone() });
         }
     });
 }

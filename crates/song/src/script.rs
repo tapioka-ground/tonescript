@@ -558,9 +558,9 @@ fn build(scope: &Scope) -> R<Song> {
         }
     }
 /// `MIX.<パート>.comp` を読む。書いていなければ何もしない。
-fn read_comp(m: &Map, part: &str) -> R<tonescript_dsp::comp::CompCfg> {
+fn read_comp(m: &Map, at: &str) -> R<tonescript_dsp::comp::CompCfg> {
     let Some(v) = field(m, "comp") else { return Ok(Default::default()) };
-    let cm = map(v, &format!("MIX.{part}.comp"))?;
+    let cm = map(v, &format!("{at}.comp"))?;
     let d = tonescript_dsp::comp::CompCfg::default();
     let cfg = tonescript_dsp::comp::CompCfg {
         threshold: mnum(&cm, "threshold", d.threshold)?,
@@ -571,14 +571,14 @@ fn read_comp(m: &Map, part: &str) -> R<tonescript_dsp::comp::CompCfg> {
         knee: mnum(&cm, "knee", d.knee)?,
         makeup: mnum(&cm, "makeup", d.makeup)?,
     };
-    cfg.check().map_err(|e| LoadError::Shape(format!("MIX.{part}: {e}")))?;
+    cfg.check().map_err(|e| LoadError::Shape(format!("{at}: {e}")))?;
     Ok(cfg)
 }
 
 /// `MIX.<パート>.eq` を読む。書いていない所は素通し。
-fn read_eq(m: &Map, part: &str) -> R<tonescript_dsp::eq::EqCfg> {
+fn read_eq(m: &Map, at: &str) -> R<tonescript_dsp::eq::EqCfg> {
     let Some(v) = field(m, "eq") else { return Ok(Default::default()) };
-    let em = map(v, &format!("MIX.{part}.eq"))?;
+    let em = map(v, &format!("{at}.eq"))?;
     let d = tonescript_dsp::eq::EqCfg::default();
     let cfg = tonescript_dsp::eq::EqCfg {
         low: mnum(&em, "low", d.low)?,
@@ -590,7 +590,7 @@ fn read_eq(m: &Map, part: &str) -> R<tonescript_dsp::eq::EqCfg> {
         high_hz: mnum(&em, "high_hz", d.high_hz)?,
     };
     // 鳴らす前に確かめる。暴れる値はここで止める
-    cfg.check().map_err(|e| LoadError::Shape(format!("MIX.{part}: {e}")))?;
+    cfg.check().map_err(|e| LoadError::Shape(format!("{at}: {e}")))?;
     Ok(cfg)
 }
 
@@ -603,12 +603,44 @@ fn read_eq(m: &Map, part: &str) -> R<tonescript_dsp::eq::EqCfg> {
         return shape(format!("SWING_GRID が {} です。1〜16 の間に", s.swing_grid));
     }
 
+    // --- バス
+    if let Some(v) = get(scope, "BUSES") {
+        for (name, bv) in map(&v, "BUSES")?.iter() {
+            let bm = map(bv, &format!("BUSES.{name}"))?;
+            let d = BusCfg::default();
+            let cfg = BusCfg {
+                label: field(&bm, "label")
+                    .and_then(|v| v.clone().into_string().ok())
+                    .unwrap_or_else(|| name.to_string()),
+                gain: mnum(&bm, "gain", d.gain)?,
+                pan: mnum(&bm, "pan", d.pan)?,
+                eq: read_eq(&bm, &format!("BUSES.{name}"))?,
+                comp: read_comp(&bm, &format!("BUSES.{name}"))?,
+                reverb: mnum(&bm, "reverb", d.reverb)?,
+                duck: mnum(&bm, "duck", d.duck)?,
+            };
+            if !(0.0..=8.0).contains(&cfg.gain) {
+                return shape(format!("BUSES.{name} の gain が {} です。0〜8 の間に", cfg.gain));
+            }
+            if !(-1.0..=1.0).contains(&cfg.pan) {
+                return shape(format!("BUSES.{name} の pan が {} です。-1〜1 の間に", cfg.pan));
+            }
+            for (k, v) in [("reverb", cfg.reverb), ("duck", cfg.duck)] {
+                if !(0.0..=2.0).contains(&v) {
+                    return shape(format!("BUSES.{name} の {k} が {v} です。0〜2 の間に"));
+                }
+            }
+            s.buses.insert(name.to_string(), cfg);
+        }
+    }
+
     if let Some(v) = get(scope, "MIX") {
         for (k, val) in map(&v, "MIX")?.iter() {
             let m = map(val, "MIX の中身")?;
             s.mix.insert(
                 k.to_string(),
                 MixCfg {
+                    bus: field(&m, "bus").and_then(|v| v.clone().into_string().ok()),
                     width: field(&m, "width").map(|v| num(v, "width")).transpose()?.unwrap_or(0.0),
                     pan: {
                         let v = field(&m, "pan").map(|v| num(v, "pan")).transpose()?.unwrap_or(0.0);
@@ -617,14 +649,26 @@ fn read_eq(m: &Map, part: &str) -> R<tonescript_dsp::eq::EqCfg> {
                         }
                         v
                     },
-                    eq: read_eq(&m, k)?,
-                    comp: read_comp(&m, k)?,
+                    eq: read_eq(&m, &format!("MIX.{k}"))?,
+                    comp: read_comp(&m, &format!("MIX.{k}"))?,
                     reverb: field(&m, "reverb").map(|v| num(v, "reverb")).transpose()?.unwrap_or(0.0),
                     duck: field(&m, "duck").map(|v| num(v, "duck")).transpose()?.unwrap_or(0.0),
                 },
             );
         }
     }
+    // 無いバスを指していたら止める。黙ってマスターへ流すと、
+    // 「バスに送ったのに効かない」という分かりにくい形で出る
+    for (part, cfg) in &s.mix {
+        if let Some(b) = &cfg.bus {
+            if !s.buses.contains_key(b) {
+                return shape(format!(
+                    "MIX.{part} の bus が {b} ですが、BUSES に {b} がありません"
+                ));
+            }
+        }
+    }
+
     if let Some(v) = get(scope, "LEAD_PATCH") {
         for (k, val) in map(&v, "LEAD_PATCH")?.iter() {
             s.lead_patch.insert(k.to_string(), text(val, "LEAD_PATCH の値")?);

@@ -500,6 +500,7 @@ let PREMIX_LUFS = -20.0;
 
 | `MIX` key | Meaning |
 |---|---|
+| `bus` | name of a bus in `BUSES` to send this part to. Left out, it goes straight to master (below) |
 | `width` | stereo width. 0 is dead centre. **Widening the low end blurs it**, so keep `bass` and `sub` at 0 |
 | `pan` | where it sits, -1 (left) to 1 (right). An automation lane wins over it |
 | `eq` | three bands of tone shaping (below) | flat |
@@ -565,6 +566,51 @@ through and keeps the punch. Fast (under 1 ms) catches the hit too and
 flattens it.
 
 It runs **after the EQ** — shape it first, then hold it down.
+
+### `BUSES` — one fader for a group of parts
+
+A kit is many parts — kick, snare, hats, perc. Balancing them against each
+other takes a while, and then you decide the drums are too loud. Move every
+fader and the balance you just built is gone.
+
+Send them to a bus instead. One fader moves the group and keeps the balance.
+
+```rhai
+let BUSES = #{
+    drumbus: #{ label: "drums", gain: 0.9, comp: #{ threshold: -14, ratio: 3 } },
+    air:     #{ reverb: 0.4, eq: #{ low: -6 } },
+};
+
+let MIX = #{
+    drums: #{ bus: "drumbus" },
+    perc:  #{ bus: "drumbus" },
+    lead:  #{ bus: "air" },
+};
+```
+
+| `BUSES` key | Meaning | Default |
+|---|---|---|
+| `label` | name on screen | the bus's own name |
+| `gain` | one fader for everything on it, 0–8 | 1.0 |
+| `pan` | -1 (left) to 1 (right) | 0 |
+| `eq` | same three bands as a part | flat |
+| `comp` | same compressor as a part | off |
+| `reverb` | send the whole bus to the room | 0 |
+| `duck` | how much the sidechain pushes the bus down | 0 |
+
+The same tools in the same order as a part: EQ, then compressor, then
+ducking, then the reverb send, then pan and the bus fader.
+
+Two things to know:
+
+- **A bus compressor is not the same as one per part.** It sees the group
+  added together, so a loud snare pulls the whole kit down with it. That is
+  what glues a kit into one sound — and what makes it pump if you overdo it.
+- **A bus cannot feed another bus.** Parts go to buses, buses go to master.
+  Nesting them lets you build a loop that never ends.
+
+A name that is not in `BUSES` is refused when the song loads, rather than
+quietly going to master — otherwise you move a fader and nothing happens.
 
 ### Using the reverb
 
@@ -998,6 +1044,7 @@ Worth telling the AI up front:
 | `GAINS` | | part → multiplier | 1.0 |
 | `MASTER_GAIN` | | number | 1.0 |
 | `MIX` | | part → settings | centred, no reverb, no ducking |
+| `BUSES` | | name → settings | none |
 | `AUTOMATION` | | part → lanes | none |
 | `SECTION_PATCH` | | section → part → instrument | none |
 | `LEAD_PATCH` | | section → instrument | none |

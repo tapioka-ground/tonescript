@@ -24,6 +24,8 @@ pub struct PartPlan {
     pub mix: MixCfg,
     /// 鳴らすか（ミュート・ソロの結果）
     pub audible: bool,
+    /// 行き先のバス（[`Plan::buses`] の何番目か）。`None` ならマスターへ直接
+    pub bus: Option<usize>,
     /// 音量・左右・残響・ダッキングの線
     pub gain_curve: Option<Curve>,
     pub pan_curve: Option<Curve>,
@@ -32,14 +34,19 @@ pub struct PartPlan {
 }
 
 impl PartPlan {
-    fn new(name: &str, song: &Song) -> Self {
+    fn new(name: &str, song: &Song, buses: &[String]) -> Self {
         let lanes = song.automation.get(name);
         let lane = |l: Lane| lanes.and_then(|m| m.get(&l)).cloned().filter(|c| !c.is_empty());
         Self {
             name: name.to_string(),
             gain: song.gains.get(name).copied().unwrap_or(1.0),
-            mix: song.mix.get(name).copied().unwrap_or_default(),
+            mix: song.mix.get(name).cloned().unwrap_or_default(),
             audible: true,
+            bus: song
+                .mix
+                .get(name)
+                .and_then(|m| m.bus.as_deref())
+                .and_then(|b| buses.iter().position(|n| n == b)),
             gain_curve: lane(Lane::Gain),
             pan_curve: lane(Lane::Pan),
             reverb_curve: lane(Lane::Reverb),
@@ -48,10 +55,19 @@ impl PartPlan {
     }
 }
 
+/// バス1本ぶんの写し。
+#[derive(Clone, Debug)]
+pub struct BusPlan {
+    pub name: String,
+    pub cfg: tonescript_song::model::BusCfg,
+}
+
 /// 音側が見る写し。作ったあとは誰も書き換えない。
 #[derive(Clone, Debug)]
 pub struct Plan {
     pub parts: Vec<PartPlan>,
+    /// バス。名前順
+    pub buses: Vec<BusPlan>,
     /// パート名 -> `parts` の何番目か
     pub index: HashMap<String, usize>,
     /// 目盛り -> 曲の頭からの秒数
@@ -70,14 +86,20 @@ impl Plan {
     pub fn from_song(song: &Song, parts: &[String]) -> Self {
         let times = tonescript_render::arrange::step_times(song);
         let total = ((times.last().copied().unwrap_or(0.0) + 4.0) * SR as f64) as u64;
+        let bus_names: Vec<String> = song.buses.keys().cloned().collect();
+        let buses: Vec<BusPlan> = bus_names
+            .iter()
+            .map(|n| BusPlan { name: n.clone(), cfg: song.buses[n].clone() })
+            .collect();
         let mut index = HashMap::new();
         let mut list = Vec::with_capacity(parts.len());
         for (i, p) in parts.iter().enumerate() {
             index.insert(p.clone(), i);
-            list.push(PartPlan::new(p, song));
+            list.push(PartPlan::new(p, song, &bus_names));
         }
         Self {
             parts: list,
+            buses,
             index,
             step_times: Arc::new(times),
             sidechain: song.sidechain,
@@ -91,6 +113,7 @@ impl Plan {
     pub fn empty() -> Self {
         Self {
             parts: Vec::new(),
+            buses: Vec::new(),
             index: HashMap::new(),
             step_times: Arc::new(vec![0.0]),
             sidechain: (0.70, 0.003, 0.020, 0.200),
@@ -102,6 +125,20 @@ impl Plan {
 
     pub fn part_of(&self, name: &str) -> Option<usize> {
         self.index.get(name).copied()
+    }
+
+    /// バス名 -> `buses` の何番目か。
+    pub fn bus_of(&self, name: &str) -> Option<usize> {
+        self.buses.iter().position(|b| b.name == name)
+    }
+
+    /// パートの行き先を、名前から番号へ引き直す。
+    ///
+    /// 音側が見ているのは**番号**（1サンプルごとに名前を突き合わせるわけには
+    /// いかない）。`mix.bus` を触ったら必ずこれを呼ぶ。
+    pub fn resolve_bus(&mut self, i: usize) {
+        let want = self.parts[i].mix.bus.clone();
+        self.parts[i].bus = want.and_then(|b| self.bus_of(&b));
     }
 
     /// 目盛りを秒へ。範囲の外は端の値で止める。

@@ -306,7 +306,8 @@ impl Engine {
         }
         for (name, m) in mix {
             if let Some(i) = plan.part_of(name) {
-                plan.parts[i].mix = *m;
+                plan.parts[i].mix = m.clone();
+                plan.resolve_bus(i);
             }
         }
         self.plan = plan;
@@ -324,6 +325,48 @@ impl Engine {
     pub fn set_pan(&mut self, part: &str, pan: f32) {
         if let Some(i) = self.plan.part_of(part) {
             self.tweak(|p| p.parts[i].mix.pan = pan.clamp(-1.0, 1.0));
+        }
+    }
+
+    /// パートのミックス設定を丸ごと差し替える。
+    ///
+    /// 触れるものが増えたので、1つずつ送る口を並べるのをやめた。
+    pub fn set_part_mix(&mut self, part: &str, mix: tonescript_song::model::MixCfg) {
+        if let Some(i) = self.plan.part_of(part) {
+            self.tweak(|p| {
+                p.parts[i].mix = mix;
+                p.resolve_bus(i);
+            });
+        }
+    }
+
+    /// 手で触ったバスの設定を、まとめて反映する。
+    ///
+    /// パートと同じ理由で1回にまとめる（曲を開いた瞬間にバスの数だけ
+    /// 届かないように）。
+    pub fn set_buses(&mut self, buses: &std::collections::HashMap<String, tonescript_song::model::BusCfg>) {
+        if buses.is_empty() {
+            return;
+        }
+        let mut plan = self.plan.clone();
+        let mut hit = false;
+        for (name, cfg) in buses {
+            if let Some(i) = plan.bus_of(name) {
+                plan.buses[i].cfg = cfg.clone();
+                hit = true;
+            }
+        }
+        if !hit {
+            return;
+        }
+        self.plan = plan;
+        let _ = self.cmd.send(Cmd::Plan(Arc::new(self.plan.clone())));
+    }
+
+    /// バスの設定を丸ごと差し替える。鳴らしたまま効く。
+    pub fn set_bus(&mut self, name: &str, cfg: tonescript_song::model::BusCfg) {
+        if let Some(i) = self.plan.bus_of(name) {
+            self.tweak(|p| p.buses[i].cfg = cfg);
         }
     }
 

@@ -524,7 +524,14 @@ impl App {
             song.gains.insert(part.clone(), *g);
         }
         for (part, m) in &self.project.mix {
-            song.mix.insert(part.clone(), *m);
+            song.mix.insert(part.clone(), m.clone());
+        }
+        for (name, cfg) in &self.project.buses {
+            // **曲ファイルに無いバスは足さない。** バスを増やすのは
+            // 曲ファイル側の仕事で、ここは触ったぶんの上書きだけ
+            if song.buses.contains_key(name) {
+                song.buses.insert(name.clone(), cfg.clone());
+            }
         }
         for (name, t) in &self.project.takes {
             song.audio_tracks.insert(name.clone(), t.clone());
@@ -714,6 +721,7 @@ impl App {
         // 手で触ったぶん（フェーダー・送り・ミュート）を重ねる。
         // 書き出しと同じ重ね方にすること
         self.engine.set_levels(&self.project.gains, &self.project.mix);
+        self.engine.set_buses(&self.project.buses);
         self.engine.set_mutes(&self.project.muted, &self.project.soloed);
         self.engine.seek(self.sample_of(self.head));
         if let Some((a, b)) = self.loop_range {
@@ -1129,8 +1137,13 @@ impl App {
                 }
                 mixer::Edit::Mix { part, mix } => {
                     self.history.record(&self.project, Tag::Curve(part.clone(), "mix"));
+                    self.engine.set_part_mix(&part, mix.clone());
                     self.project.mix.insert(part.clone(), mix);
-                    self.engine.set_mix(&part, mix.width, mix.reverb, mix.duck);
+                }
+                mixer::Edit::Bus { name, cfg } => {
+                    self.history.record(&self.project, Tag::Curve(name.clone(), "bus"));
+                    self.engine.set_bus(&name, cfg.clone());
+                    self.project.buses.insert(name, cfg);
                 }
                 mixer::Edit::Mute(part) => {
                     self.record(Tag::Once);

@@ -296,6 +296,11 @@ pub fn mix_down_with(
     let mut send = vec![0.0f32; total];
     let mut sent = 0usize;
 
+    // バスの入れ物。パートをここへ集めて、まとめて整えてからマスターへ出す。
+    // **バスを指していないパートは今までどおりマスターへ直接。**
+    let bus_names: Vec<String> = song.buses.keys().cloned().collect();
+    let mut bus_buf: Vec<Stereo> = bus_names.iter().map(|_| Stereo::silent(total)).collect();
+
     let mut names: Vec<&String> = stems.keys().collect();
     names.sort();
     let names: Vec<String> = names.into_iter().cloned().collect();
@@ -319,7 +324,7 @@ pub fn mix_down_with(
             cut.map(|d| format!("  ★ {d:.1}dB")).unwrap_or_default()
         ));
 
-        let cfg = song.mix.get(name).copied().unwrap_or_default();
+        let cfg = song.mix.get(name).cloned().unwrap_or_default();
         // 音の整え。**鳴らす側と同じ所を通す**（[`tonescript_dsp::eq`]）
         if !cfg.eq.is_flat() {
             tonescript_dsp::eq::Eq::new(cfg.eq).process(buf);
@@ -398,7 +403,70 @@ pub fn mix_down_with(
                 None => progress(&format!("             左右 {:+.2}", cfg.pan)),
             }
         }
-        out.add(&st, gain);
+        // 行き先。バスを指していればそこへ、無ければマスターへ
+        match cfg.bus.as_deref().and_then(|b| bus_names.iter().position(|n| n == b)) {
+            Some(bi) => bus_buf[bi].add(&st, gain),
+            None => out.add(&st, gain),
+        }
+    }
+
+    // バスを整えてマスターへ。パートと同じ道具が同じ順で掛かる
+    for (bi, name) in bus_names.iter().enumerate() {
+        let b = &song.buses[name];
+        let st = &mut bus_buf[bi];
+        if st.peak() <= 0.0 {
+            progress(&format!("  バス {:<8} 何も来ていません", name));
+            continue;
+        }
+        let before = tonescript_dsp::rms(&st.l);
+        if !b.eq.is_flat() {
+            tonescript_dsp::eq::Eq::new(b.eq).process(&mut st.l);
+            tonescript_dsp::eq::Eq::new(b.eq).process(&mut st.r);
+        }
+        if !b.comp.is_off() {
+            // **左右で同じだけ押さえる。** 別々に掛けると、片方だけ
+            // 潰れたときに音の位置が動く
+            let mut c = tonescript_dsp::comp::Comp::new(b.comp);
+            for i in 0..st.len() {
+                let mono = (st.l[i] + st.r[i]) * 0.5;
+                let shaped = c.run(mono);
+                let g = if mono.abs() > 1e-9 { shaped / mono } else { 1.0 };
+                st.l[i] *= g;
+                st.r[i] *= g;
+            }
+        }
+        if b.duck > 0.0 {
+            for i in 0..st.len() {
+                let k = 1.0 - (1.0 - duck_env[i]) * b.duck;
+                st.l[i] *= k;
+                st.r[i] *= k;
+            }
+        }
+        if b.reverb > 0.0 {
+            for i in 0..st.len() {
+                send[i] += (st.l[i] + st.r[i]) * 0.5 * b.reverb;
+            }
+            sent += 1;
+        }
+        if b.pan != 0.0 {
+            let (gl, gr) = mix::pan_gains(b.pan);
+            let k = std::f32::consts::SQRT_2;
+            for i in 0..st.len() {
+                st.l[i] *= gl * k;
+                st.r[i] *= gr * k;
+            }
+        }
+        progress(&format!(
+            "  バス {:<8} 実効 {:.4} -> {:.4}  x{:.2}{}{}",
+            name,
+            before,
+            tonescript_dsp::rms(&st.l),
+            b.gain,
+            if b.eq.is_flat() { "" } else { "  EQ" },
+            if b.comp.is_off() { "" } else { "  押さえ込み" }
+        ));
+        let st = bus_buf[bi].clone();
+        out.add(&st, b.gain);
     }
     // 残響。集めた送りを1つの部屋へ通して、戻ってきたぶんを足す
     if sent > 0 {
