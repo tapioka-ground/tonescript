@@ -21,6 +21,7 @@ mod keys;
 mod mixer;
 mod rec;
 mod sel;
+mod newpart;
 mod newsong;
 mod arrange;
 mod prefs;
@@ -191,6 +192,11 @@ struct App {
     watch_at: Option<std::time::Instant>,
     /// 外で直されたら読み直すか
     watch_on: bool,
+
+    /// パートを足す窓。開いていれば Some
+    adding: Option<newpart::Spec>,
+    /// その窓に出す注意書き
+    add_error: Option<String>,
 }
 
 impl Default for App {
@@ -255,6 +261,8 @@ impl Default for App {
             song_pending: None,
             watch_at: None,
             watch_on: true,
+            adding: None,
+            add_error: None,
             tune_error: None,
         };
         app.refresh_list();
@@ -755,6 +763,66 @@ impl App {
         }
         self.in_ports = rec::Rec::ports();
         self.in_ports_at = Some(std::time::Instant::now());
+    }
+
+    /// パートを1つ足す。曲ファイルへ書いて、読み直す。
+    ///
+    /// 書き換えは**読めることを確かめてから**置く。半分だけ書けた曲ファイルを
+    /// 残すと、次に開けなくなる
+    fn add_part(&mut self) {
+        let (Some(spec), Some(song), Some(name)) =
+            (self.adding.clone(), self.song.clone(), self.picked.clone())
+        else {
+            return;
+        };
+        if let Err(e) = newpart::check(&spec, &song) {
+            self.add_error = Some(e);
+            return;
+        }
+        let part = spec.name.trim().to_string();
+        let path = songs_dir().join(format!("{name}.rhai"));
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) => {
+                self.add_error = Some(format!("{}: {e}", path.display()));
+                return;
+            }
+        };
+        let ch = newpart::free_channel(&song);
+        let out = tonescript_song::rewrite::add_voice(&text, &part, ch, &spec.patch, &spec.label)
+            .and_then(|t| tonescript_song::rewrite::add_to_list(&t, "EDIT_PARTS", &part))
+            .and_then(|t| tonescript_song::rewrite::verify(&t).map(|_| t));
+        let out = match out {
+            Ok(t) => t,
+            Err(e) => {
+                self.add_error = Some(e.to_string());
+                return;
+            }
+        };
+        if let Err(e) = std::fs::write(&path, &out) {
+            self.add_error = Some(format!("{}: {e}", path.display()));
+            return;
+        }
+
+        // 全部の小節で鳴らす。**`VOICES` に足しただけでは ARRANGE に
+        // 居ないので、どこでも鳴らない。** 足した本人はまず鳴らしたい
+        if spec.everywhere {
+            self.record(Tag::Once);
+            for bar in 1..=song.bars() {
+                let now: Vec<String> = song.arrange.get(&bar).cloned().unwrap_or_default();
+                self.project.set_plays(bar, &part, true, &now);
+            }
+            self.saver.touched();
+        }
+
+        // 自分で書いたので、見張りに二度読みさせない
+        self.song_seen = song_mtime(&path);
+        self.song_pending = None;
+        self.reload_song();
+        self.ed.part = part.clone();
+        self.adding = None;
+        self.add_error = None;
+        self.status = format!("パート {part} を足しました（ch {ch} / {}）", spec.patch);
     }
 
     /// 曲ファイルを読み直す。**編集したぶんは残す。**
@@ -1628,6 +1696,9 @@ impl eframe::App for App {
         if self.audio_win.is_some() {
             audio_window(ctx, self);
         }
+        if self.adding.is_some() {
+            new_part_window(ctx, self);
+        }
 
         self.tabs(ctx);
         if self.screen == Screen::Browser {
@@ -2089,6 +2160,91 @@ fn settings_window(ctx: &egui::Context, app: &mut App) {
     }
     if !open {
         app.tuning = None;
+    }
+}
+
+/// パートを足す窓。
+fn new_part_window(ctx: &egui::Context, app: &mut App) {
+    let mut open = true;
+    let mut apply = false;
+    let mut d = app.adding.clone().unwrap_or_default();
+    let names = app.song.as_ref().map(newpart::patch_names).unwrap_or_default();
+    let ch = app.song.as_ref().map(newpart::free_channel).unwrap_or(0);
+
+    egui::Window::new("パートを足す")
+        .open(&mut open)
+        .resizable(false)
+        .collapsible(false)
+        .show(ctx, |ui| {
+            egui::Grid::new("newpart").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+                ui.label("名前");
+                ui.add(
+                    egui::TextEdit::singleline(&mut d.name)
+                        .desired_width(160.0)
+                        .hint_text("guitar2"),
+                )
+                .on_hover_text("曲ファイルの鍵になるので英数字と _ だけ");
+                ui.end_row();
+
+                ui.label("画面に出す名前");
+                ui.add(
+                    egui::TextEdit::singleline(&mut d.label)
+                        .desired_width(160.0)
+                        .hint_text("ギター"),
+                );
+                ui.end_row();
+
+                ui.label("音色");
+                egui::ComboBox::from_id_salt("newpart_patch")
+                    .selected_text(&d.patch)
+                    .width(200.0)
+                    .show_ui(ui, |ui| {
+                        egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                            for n in &names {
+                                if ui.selectable_label(&d.patch == n, n).clicked() {
+                                    d.patch = n.clone();
+                                }
+                            }
+                        });
+                    })
+                    .response
+                    .on_hover_text("あとから VOICES で変えられます");
+                ui.end_row();
+
+                ui.label("チャンネル");
+                ui.label(theme::dim(&format!("{ch}（空いているもの）")));
+                ui.end_row();
+            });
+
+            ui.add_space(6.0);
+            ui.checkbox(&mut d.everywhere, "全部の小節で鳴らす")
+                .on_hover_text("外すと、アレンジビューで塗るまでどこでも鳴りません");
+            ui.add_space(4.0);
+            ui.label(theme::dim("曲ファイルの VOICES へ書きます。音符はまだ空です"));
+
+            if let Some(e) = &app.add_error {
+                ui.add_space(4.0);
+                ui.colored_label(theme::RED, e);
+            }
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.button("足す").clicked() {
+                    apply = true;
+                }
+                if ui.button("やめる").clicked() {
+                    app.adding = None;
+                }
+            });
+        });
+
+    if app.adding.is_some() {
+        app.adding = Some(d);
+    }
+    if apply {
+        app.add_part();
+    }
+    if !open {
+        app.adding = None;
     }
 }
 
@@ -2945,6 +3101,23 @@ impl App {
                 });
             }
 
+            if ui
+                .add_enabled(self.song.is_some(), egui::Button::new("＋ パートを足す"))
+                .on_hover_text("楽器を1つ増やす。曲ファイルの VOICES へ書きます")
+                .clicked()
+            {
+                if let Some(song) = &self.song {
+                    self.adding = Some(newpart::Spec {
+                        patch: newpart::patch_names(song)
+                            .first()
+                            .cloned()
+                            .unwrap_or_else(|| "piano".into()),
+                        ..Default::default()
+                    });
+                    self.add_error = None;
+                }
+            }
+
             // 録ったもの
             if !self.project.takes.is_empty() {
                 ui.add_space(10.0);
@@ -3387,6 +3560,67 @@ mod tests {
         app.rebuild();
         let back = app.score.clone().expect("組み直せる");
         assert!(in_bar1(&back) > 0, "戻したのに鳴らない");
+    }
+
+    /// **画面からパートを足せること。**
+    ///
+    /// 今まで曲ファイルを手で直すしかなかった所。DAW の「トラックを追加」
+    #[test]
+    fn a_part_can_be_added_from_the_screen() {
+        let _one = solo();
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("tonescript_addpart_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+        let text = std::fs::read_to_string(repo.join("songs").join("example.rhai")).unwrap();
+        let path = dir.join("added.rhai");
+        std::fs::write(&path, &text).unwrap();
+        std::env::set_var("TONESCRIPT_SONGS", &dir);
+        let mut tmp = std::env::temp_dir();
+        tmp.push(format!("tonescript_addpart_out_{}", std::process::id()));
+        std::env::set_var("TONESCRIPT_ROOT", &tmp);
+
+        let mut app = App::default();
+        app.open_song("added");
+        let bars = app.song.as_ref().expect("開けている").bars();
+
+        app.adding = Some(newpart::Spec {
+            name: "guitar2".into(),
+            label: "ギター".into(),
+            patch: "nylon".into(),
+            everywhere: true,
+        });
+        app.add_part();
+        assert!(app.add_error.is_none(), "足せなかった: {:?}", app.add_error);
+        assert!(app.adding.is_none(), "窓が閉じていない");
+
+        // 曲ファイルに書かれ、読み直されていること
+        let song = app.song.as_ref().expect("読み直せている");
+        assert!(song.voices.contains_key("guitar2"), "曲に入っていない");
+        assert!(song.edit_parts.iter().any(|p| p == "guitar2"), "編集できる所に出ない");
+        assert_eq!(song.voices["guitar2"].patch.as_deref(), Some("nylon"));
+        assert_ne!(song.voices["guitar2"].ch, 9, "打楽器のチャンネルに置かれた");
+        // ファイルそのものにも残っていること（読み直しではなく書き込みの確認）
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(on_disk.contains("guitar2"), "ファイルに書かれていない");
+
+        // 全部の小節で鳴ることになっていること
+        for bar in [1u32, bars / 2, bars] {
+            assert!(
+                app.project.plays(bar, "guitar2", song.plays(bar, "guitar2")),
+                "{bar}小節目で鳴らない"
+            );
+        }
+
+        // 同じ名前は二度足せない。ファイルも変わらないこと
+        let before = std::fs::read_to_string(&path).unwrap();
+        app.adding = Some(newpart::Spec { name: "guitar2".into(), ..Default::default() });
+        app.add_part();
+        assert!(app.add_error.is_some(), "同じ名前が通った");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before, "断ったのに書いた");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 外で直された曲ファイルが、**開き直さずに出てくること。**

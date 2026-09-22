@@ -132,13 +132,12 @@ pub fn set_text(text: &str, name: &str, value: &str) -> R<String> {
 /// `let SECTIONS = [ ... ];` をまるごと書き換える。
 ///
 /// 中身が複数行にわたるので、`[` と `]` の釣り合いで終わりを探す。
-pub fn set_sections(text: &str, sections: &[Section]) -> R<String> {
-    let start = find_line(text, "SECTIONS")?;
-    let lines: Vec<&str> = text.lines().collect();
-
-    // 終わりを探す。文字列の中の括弧は数えない
+/// `start` の行から始まる括弧が、どの行で閉じるか。
+///
+/// **文字列の中とコメントの中は数えない。** `"]"` と書かれた所で
+/// 閉じたことにすると、途中で切れたものを書き戻してしまう
+fn block_end(lines: &[&str], start: usize, open: char, close: char) -> Option<usize> {
     let mut depth = 0i32;
-    let mut end = None;
     let mut started = false;
     for (i, line) in lines.iter().enumerate().skip(start) {
         let mut in_str = false;
@@ -150,24 +149,30 @@ pub fn set_sections(text: &str, sections: &[Section]) -> R<String> {
                 }
                 continue;
             }
-            match c {
-                '"' => in_str = true,
-                '/' if prev_slash => break, // ここから先はコメント
-                '[' => {
-                    depth += 1;
-                    started = true;
-                }
-                ']' => depth -= 1,
-                _ => {}
+            if c == '"' {
+                in_str = true;
+            } else if c == '/' && prev_slash {
+                break; // ここから先はコメント
+            } else if c == open {
+                depth += 1;
+                started = true;
+            } else if c == close {
+                depth -= 1;
             }
             prev_slash = c == '/';
         }
         if started && depth <= 0 {
-            end = Some(i);
-            break;
+            return Some(i);
         }
     }
-    let end = end.ok_or_else(|| Error::Broken("SECTIONS が閉じていません".into()))?;
+    None
+}
+
+pub fn set_sections(text: &str, sections: &[Section]) -> R<String> {
+    let start = find_line(text, "SECTIONS")?;
+    let lines: Vec<&str> = text.lines().collect();
+    let end = block_end(&lines, start, '[', ']')
+        .ok_or_else(|| Error::Broken("SECTIONS が閉じていません".into()))?;
 
     let mut body = String::from("let SECTIONS = [\n");
     body.push_str("    // [名前, 小節数, ベース型, ドラムキット, リフ型, 音量, 拍子]\n");
@@ -199,6 +204,88 @@ pub fn set_sections(text: &str, sections: &[Section]) -> R<String> {
             out.push_str(&body);
             out.push('\n');
         }
+    }
+    Ok(out)
+}
+
+/// パートを1つ `VOICES` へ足す。
+///
+/// **入れるのは開き括弧のすぐ後ろ。** 最後の項目の後ろへ入れようとすると、
+/// そこに読点が無い書き方（`#{ a: 1 }`）で壊れる。前に入れるなら、
+/// 自分の後ろに読点を置くだけで、どちらの書き方でも通る
+pub fn add_voice(text: &str, name: &str, ch: u32, patch: &str, label: &str) -> R<String> {
+    let start = find_line(text, "VOICES")?;
+    let lines: Vec<&str> = text.lines().collect();
+    let end = block_end(&lines, start, '{', '}')
+        .ok_or_else(|| Error::Broken("VOICES が閉じていません".into()))?;
+
+    let label = if label.trim().is_empty() { name } else { label };
+    let entry = format!(
+        "{}: #{{ ch: {ch}, patch: \"{}\", volume: 100, label: \"{}\" }},",
+        q(name),
+        q(patch),
+        q(label)
+    );
+
+    let mut out = String::with_capacity(text.len() + entry.len() + 8);
+    for (i, line) in lines.iter().enumerate() {
+        if i == start && start == end {
+            // 1行で書かれている。開き括弧の直後へ差し込む
+            let at = line.find("#{").ok_or_else(|| {
+                Error::Broken("VOICES の書き方が分かりません".into())
+            })? + 2;
+            out.push_str(&line[..at]);
+            out.push(' ');
+            out.push_str(&entry);
+            out.push_str(&line[at..]);
+        } else if i == start {
+            out.push_str(line);
+            out.push('\n');
+            out.push_str("    ");
+            out.push_str(&entry);
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+/// `let 名前 = [ ... ];` の並びへ文字列を1つ足す。
+///
+/// その行が無ければ**何もせずに返す**。`EDIT_PARTS` のように、書いて
+/// いなければ全部が対象になる決まりのものがあるので、無いこと自体は
+/// 誤りではない
+pub fn add_to_list(text: &str, name: &str, value: &str) -> R<String> {
+    let Ok(start) = find_line(text, name) else { return Ok(text.to_string()) };
+    let lines: Vec<&str> = text.lines().collect();
+    let end = block_end(&lines, start, '[', ']')
+        .ok_or_else(|| Error::Broken(format!("{name} が閉じていません")))?;
+
+    // 既にあれば足さない
+    let body: String = lines[start..=end].join("
+");
+    if body.contains(&format!("\"{}\"", q(value))) {
+        return Ok(text.to_string());
+    }
+
+    let mut out = String::with_capacity(text.len() + value.len() + 8);
+    for (i, line) in lines.iter().enumerate() {
+        if i == end {
+            // 閉じ括弧の**前**へ入れる。中身が空でも通る形にする
+            let at = line.rfind(']').ok_or_else(|| {
+                Error::Broken(format!("{name} の書き方が分かりません"))
+            })?;
+            let head = &line[..at];
+            let sep = if head.trim_end().ends_with('[') { "" } else { ", " };
+            out.push_str(head.trim_end());
+            out.push_str(sep);
+            out.push_str(&format!("\"{}\"", q(value)));
+            out.push_str(&line[at..]);
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
     }
     Ok(out)
 }
@@ -492,4 +579,68 @@ let MASTER_LUFS = -9;
         let out = set_number(SRC, "MASTER_GAIN", 0.700000001).unwrap();
         assert!(out.contains("let MASTER_GAIN = 0.7;"), "{out}");
     }
+
+    /// 1行で書かれた VOICES へ足せること。
+    #[test]
+    fn a_part_can_be_added_to_a_one_line_voices() {
+        let out = add_voice(SRC, "guitar", 6, "nylon", "ギター").expect("足せるはず");
+        let song = verify(&out).expect("読めるはず");
+        assert!(song.voices.contains_key("guitar"), "足したパートが無い");
+        assert!(song.voices.contains_key("lead"), "元のパートが消えた");
+        // 元からあったものは1文字も変わらないこと
+        assert!(out.contains("let BPM = 128;              // ここのコメントも残ってほしい"));
+    }
+
+    /// 複数行で書かれていて、**最後の項目に読点が無い**形。
+    ///
+    /// 後ろへ足す作りだと、ここで `} name: ...` になって壊れる
+    #[test]
+    fn a_part_can_be_added_when_the_last_entry_has_no_comma() {
+        let src = "let BPM = 120;
+let SECTIONS = [[\"A\", 1, \"p\", \"k\", \"m\", 1.0]];
+let VOICES = #{
+    lead: #{ ch: 0, patch: \"piano\" },
+    bass: #{ ch: 1, patch: \"sub\" }
+};
+";
+        let out = add_voice(src, "guitar", 6, "nylon", "").expect("足せるはず");
+        let song = verify(&out).expect("読めるはず");
+        for p in ["lead", "bass", "guitar"] {
+            assert!(song.voices.contains_key(p), "{p} が無い");
+        }
+        // label を書かなければ名前をそのまま使う
+        assert_eq!(song.voices["guitar"].label, "guitar");
+    }
+
+    #[test]
+    fn a_part_is_added_to_the_editable_list_too() {
+        let src = "let BPM = 120;
+let SECTIONS = [[\"A\", 1, \"p\", \"k\", \"m\", 1.0]];
+let VOICES = #{ lead: #{ ch: 0, patch: \"piano\" } };
+let EDIT_PARTS = [\"lead\"];
+";
+        let out = add_voice(src, "guitar", 6, "nylon", "ギター").expect("足せる");
+        let out = add_to_list(&out, "EDIT_PARTS", "guitar").expect("足せる");
+        let song = verify(&out).expect("読めるはず");
+        assert_eq!(song.edit_parts, vec!["lead".to_string(), "guitar".to_string()]);
+        // 二度足しても増えない
+        let again = add_to_list(&out, "EDIT_PARTS", "guitar").expect("足せる");
+        assert_eq!(verify(&again).unwrap().edit_parts.len(), 2, "同じ名前が2つ入った");
+    }
+
+    #[test]
+    fn adding_to_a_list_that_is_not_written_is_not_an_error() {
+        // EDIT_PARTS を書いていない曲がある。書いていなければ全部が対象、
+        // という決まりなので、無いこと自体は誤りではない
+        let out = add_to_list(SRC, "EDIT_PARTS", "guitar").expect("黙って通るはず");
+        assert_eq!(out, SRC, "無い並びに書き込んだ");
+    }
+
+    #[test]
+    fn a_broken_name_does_not_get_written() {
+        // 引用符を混ぜた名前でファイルを壊さないこと
+        let out = add_voice(SRC, "gui\"tar", 6, "nylon\"", "ラ\"ベル").expect("足せる");
+        verify(&out).expect("壊れた文字が入って読めなくなった");
+    }
+
 }
