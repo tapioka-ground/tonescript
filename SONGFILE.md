@@ -682,7 +682,7 @@ let SCALE_ROOT = 9;                    // A (C=0, A=9)
 
 ---
 
-## 9. The 135 instruments
+## 9. The 139 instruments
 
 `tone patches` prints them. They come in two kinds, and both are used the
 same way — just a name in `VOICES`.
@@ -700,7 +700,7 @@ same way — just a name in `VOICES`.
 | Plucked | `sitar` `oud` |
 
 
-**Ordinary instruments (89)** — written as recipes (§10), so you can copy
+**Ordinary instruments (93)** — written as recipes (§10), so you can copy
 one into your song file and change it.
 
 | Family | Names |
@@ -714,6 +714,7 @@ one into your song file and change it.
 | Tuned percussion | `vibraphone` `glocken` `xylophone` `tubularbell` `handpan` `steeldrum` `logdrum` `woodblock` `timpani` `taiko` |
 | Brass | `trumpet` `mutetrumpet` `trombone` `horn` `tuba` |
 | Woodwind | `sax` `clarinet` `oboe` `bassoon` `piccolo` `recorder` `bagpipe` |
+| Celtic | `tinwhistle` `irishflute` `lowwhistle` `uilleann` |
 | Voice | `aah` `ooh` `hum` `whisper` |
 | Pads | `warmpad` `glasspad` `choirpad` `sweeppad` `stringmachine` `bellpad` |
 | Synth | `plucksynth` `bellsynth` `pwmlead` `hoover` `organbass` `clickbass` |

@@ -22,6 +22,17 @@
 //!
 //! 生ドラム・生ピアノ・オーケストラは**そもそも作れない**。録ったものを
 //! 使うしかない領域で、音源ライブラリが何十GBある理由でもある。
+//!
+//! 音量の決め方
+//! ------------
+//! `gain` は手で決めていない。**鳴らして測って当てている。**
+//!
+//! 鳴っている区間の実効値を既にあるものの真ん中へ寄せ、同時に3つの高さで
+//! 山が 0.85 を超えないところで止める（`new = old * min((狙い/実効)^0.6,
+//! 0.85/山)` を数回）。耳で合わせると、持ち替えたときに音量が跳ねる。
+//!
+//! 息の雑音が多い笛は、山と実効値の比が大きいので、山で頭打ちになって
+//! 少し小さいまま落ち着く。これは本物も同じ。
 
 use crate::recipe::{
     Attack, Env, Filter, FilterKind, Fm, Osc, Recipe, Tremolo, Vibrato, Wave,
@@ -966,6 +977,72 @@ pub fn get(name: &str) -> Option<Recipe> {
             gain: 0.285,
             ..d()
         },
+        // ---- ケルトの笛
+        //
+        // 3本とも同じ作りで、**息の雑音の量と管の高さだけが違う。**
+        // 笛は縁に息を当てて鳴らすので、弦や葦舌の楽器と違って
+        // 雑音がそのまま音の一部になる。そこを削ると玩具になる
+        "tinwhistle" => Recipe {
+            // ティンホイッスル。ケルトといえばこれ。細い金属管で、
+            // 倍音が少なく澄んでいるが、息の音がはっきり乗る
+            osc: vec![Osc { wave: Wave::Sine, mix: 0.82, ..o() },
+                      // 2倍音を少しだけ。純粋な正弦だと笛に聞こえない
+                      Osc { wave: Wave::Sine, mix: 0.12, octave: 1, ..o() },
+                      Osc { wave: Wave::Noise, mix: 0.16, ..o() }],
+            env: Env { a: 0.012, d: 0.05, s: 0.92, r: 0.05 },
+            filter: Filter { kind: FilterKind::Bandpass, base: 2800.0, res: 0.35, track: 0.85, ..f() },
+            // 吹き始めの「チッ」。ここが無いと、音符の頭が丸くて舌が見えない
+            attack: Attack { amount: 0.10, hp: 4000.0, a: 0.001, d: 0.02 },
+            vibrato: Vibrato { rate: 5.2, depth: 0.005, delay: 0.25 },
+            gain: 5.640,
+            ..d()
+        },
+        "irishflute" => Recipe {
+            // アイリッシュフルート。木の横笛。ホイッスルより太く、
+            // 息の音が多い。同じ旋律でも、こちらのほうが土の匂いがする
+            osc: vec![Osc { wave: Wave::Sine, mix: 0.78, ..o() },
+                      Osc { wave: Wave::Sine, mix: 0.18, octave: 1, ..o() },
+                      // 木の管なので、金属ほど澄まない。少しだけ角を混ぜる
+                      Osc { wave: Wave::Pulse, mix: 0.07, width: 0.42, ..o() },
+                      Osc { wave: Wave::Noise, mix: 0.24, ..o() }],
+            env: Env { a: 0.03, d: 0.08, s: 0.9, r: 0.07 },
+            filter: Filter { kind: FilterKind::Bandpass, base: 1500.0, res: 0.3, track: 0.75, ..f() },
+            attack: Attack { amount: 0.13, hp: 2200.0, a: 0.002, d: 0.03 },
+            body: vec![(800.0, 4.0, 0.2)],
+            vibrato: Vibrato { rate: 4.8, depth: 0.007, delay: 0.3 },
+            gain: 2.974,
+            ..d()
+        },
+        "lowwhistle" => Recipe {
+            // ローホイッスル。ホイッスルの1オクターブ下。
+            // 息の量が同じまま管が太くなるので、雑音の割合がいちばん多い
+            osc: vec![Osc { wave: Wave::Sine, mix: 0.8, ..o() },
+                      Osc { wave: Wave::Sine, mix: 0.2, octave: 1, ..o() },
+                      Osc { wave: Wave::Noise, mix: 0.3, ..o() }],
+            env: Env { a: 0.035, d: 0.09, s: 0.9, r: 0.08 },
+            filter: Filter { kind: FilterKind::Bandpass, base: 1000.0, res: 0.28, track: 0.7, ..f() },
+            attack: Attack { amount: 0.16, hp: 1600.0, a: 0.003, d: 0.04 },
+            body: vec![(520.0, 4.0, 0.25)],
+            vibrato: Vibrato { rate: 4.4, depth: 0.006, delay: 0.35 },
+            gain: 1.607,
+            ..d()
+        },
+        "uilleann" => Recipe {
+            // イーリアンパイプ（の歌管）。バグパイプと違って鞴で送るので
+            // 息が続き、音も小さくて甘い。葦舌なので倍音はぎっしり
+            osc: vec![Osc { wave: Wave::Pulse, mix: 0.9, width: 0.28, ..o() },
+                      Osc { wave: Wave::Saw, mix: 0.35, detune: 6.0, ..o() }],
+            env: Env { a: 0.02, d: 0.06, s: 0.93, r: 0.05 },
+            filter: Filter { kind: FilterKind::Ladder, base: 1800.0, sweep: 600.0, res: 0.22,
+                             env: (0.015, 0.15, 1.2), ..f() },
+            // 葦舌の楽器らしさは胴の山に出る
+            body: vec![(1050.0, 7.0, 0.35), (2300.0, 5.0, 0.18)],
+            vibrato: Vibrato { rate: 5.0, depth: 0.004, delay: 0.3 },
+            drive: 1.3,
+            gain: 0.351,
+            ..d()
+        },
+
         "oboe" => Recipe {
             // 細い管。倍音が多く、鼻に掛かる
             osc: vec![Osc { wave: Wave::Saw, ..o() }],
@@ -1138,6 +1215,10 @@ pub const NAMES: &[&str] = &[
     "cello",
     "accordion",
     "harmonica",
+    "tinwhistle",
+    "irishflute",
+    "lowwhistle",
+    "uilleann",
 ];
 
 // 書き並べるときの省略。`..o()` で発振器の既定、`..d()` で全体の既定
@@ -1253,12 +1334,48 @@ mod tests {
     #[test]
     fn the_blown_ones_hold() {
         // 管と弓は、伸ばしているあいだ鳴り続けること
-        for n in ["trumpet", "sax", "clarinet", "violin", "cello", "accordion"] {
+        for n in ["trumpet", "sax", "clarinet", "violin", "cello", "accordion",
+                  "tinwhistle", "irishflute", "lowwhistle", "uilleann"] {
             let w = recipe::render(&get(n).unwrap(), 261.63, 48_000, 1.0, 7);
             let head = rms(&w[4800..9600]);
             let late = rms(&w[38_400..43_200]);
             assert!(late > head * 0.5, "{n} が途中で消える（{head:.4} → {late:.4}）");
         }
+    }
+
+    /// 笛に**息が入っていること。**
+    ///
+    /// 笛は縁に息を当てて鳴らすので、雑音がそのまま音の一部になる。
+    /// そこを削ると、同じ音程でも笛ではなく電子オルガンに聞こえる。
+    /// 「正弦波を1本」で済ませていないかを、ここで留める
+    #[test]
+    fn the_whistles_have_breath_in_them() {
+        // 基音より十分上だけ取り出す。息の音はそこに居る
+        let breath = |n: &str| -> f32 {
+            let w = recipe::render(&get(n).unwrap(), 261.63, 48_000, 1.0, 7);
+            let mut hi = w.clone();
+            // 6kHz から上。基音（261Hz）とその倍音は残らない
+            for _ in 0..4 {
+                hi = crate::filter::highpass(&hi, 6000.0);
+            }
+            rms(&hi) / rms(&w).max(1e-9)
+        };
+        for n in ["tinwhistle", "irishflute", "lowwhistle"] {
+            let b = breath(n);
+            // 実測 0.014〜0.021。正弦波1本なら 0.001 も出ない
+            assert!(b > 0.01, "{n} に息が入っていない（{b:.4}）");
+        }
+        // 葦舌のイーリアンパイプは息ではなく鞴なので、そこは違ってよい。
+        // 代わりに倍音がぎっしりしていること
+        let w = recipe::render(&get("uilleann").unwrap(), 261.63, 48_000, 1.0, 7);
+        let mut hi = w.clone();
+        for _ in 0..4 {
+            hi = crate::filter::highpass(&hi, 1500.0);
+        }
+        // 実測 0.043。葦舌は倍音が多いが、管の中で上が削られるので
+        // この程度に落ち着く（息の笛と同じ桁）
+        let up = rms(&hi) / rms(&w);
+        assert!(up > 0.02, "イーリアンパイプの倍音が足りない（{up:.4}）");
     }
 
     #[test]
