@@ -2550,7 +2550,8 @@ impl App {
             ui.separator();
 
             let bar_w = arrange::BAR_W[self.arr_zoom.min(arrange::BAR_W.len() - 1)];
-            let t = egui::ScrollArea::horizontal()
+            let picked = self.ed.part.clone();
+            let t = egui::ScrollArea::vertical()
                 .show(ui, |ui| {
                     arrange::panel(
                         ui,
@@ -2560,6 +2561,7 @@ impl App {
                         self.loop_range,
                         bar_w,
                         &mut self.arr_paint,
+                        &picked,
                     )
                 })
                 .inner;
@@ -2575,6 +2577,28 @@ impl App {
             if t.loop_clear {
                 self.loop_range = None;
                 self.engine.set_loop(0, 0);
+            }
+            if let Some(p) = t.pick {
+                self.ed.part = p;
+            }
+            if let Some((part, gain)) = t.gain {
+                // 摘まんでいるあいだは1段にまとめる。離すまで1回
+                self.history.record(&self.project, Tag::Curve(part.clone(), "gain"));
+                self.project.gains.insert(part.clone(), gain);
+                self.engine.set_gain(&part, gain);
+                self.saver.touched();
+            }
+            for (part, solo) in [(t.mute, false), (t.solo, true)] {
+                let Some(part) = part else { continue };
+                self.record(Tag::Once);
+                let list = if solo { &mut self.project.soloed } else { &mut self.project.muted };
+                if list.iter().any(|m| *m == part) {
+                    list.retain(|m| *m != part);
+                } else {
+                    list.push(part);
+                }
+                self.engine.set_mutes(&self.project.muted, &self.project.soloed);
+                self.saver.touched();
             }
             if !t.plays.is_empty() {
                 // 引きずっている間は1段にまとめる。離すまでで1回の取り消し
