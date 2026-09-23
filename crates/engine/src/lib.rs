@@ -109,6 +109,8 @@ impl Engine {
 
     /// 代を1つ進める。音側は古い代の音を捨て、係は数え直す。
     fn bump(&self) {
+        // 曲が変われば、前の曲で作ったぶんは無かったことになる
+        self.shared.ready.store(self.shared.pos.load(Ordering::Relaxed), Ordering::Relaxed);
         let g = self.shared.gen.fetch_add(1, Ordering::Relaxed) + 1;
         // 音側へも直接伝える（係の手が空くのを待たない）
         let _ = self.cmd.send(Cmd::Plan(Arc::new(self.plan.clone())));
@@ -177,6 +179,10 @@ impl Engine {
     /// 頭出し。鳴りかけの音は捨てて、そこから作り直す。
     pub fn seek(&self, sample: u64) {
         self.shared.pos.store(sample, Ordering::Relaxed);
+        // **印をその場で戻す。** 係が頭出しに気付くのは次に手が空いたとき
+        // なので、それまで印は前の場所のまま「もう作ってある」と言い続ける。
+        // 待つ側がそれを信じると、まだ何も作っていない所を鳴らして無音になる
+        self.shared.ready.store(sample, Ordering::Relaxed);
         let g = self.shared.gen.fetch_add(1, Ordering::Relaxed) + 1;
         let _ = self.cmd.send(Cmd::Plan(Arc::new(self.plan.clone())));
         let _ = g;
@@ -395,6 +401,14 @@ impl Engine {
     /// 全体の音量。
     pub fn set_master_gain(&mut self, g: f32) {
         self.tweak(|p| p.master_gain = g.clamp(0.0, 4.0));
+    }
+
+    /// 先回り係がどこまで作り終えたか（サンプル）。
+    ///
+    /// ここより手前なら、鳴らすのに要る音符は全部届いている。
+    /// **待つならここを見る。時計で待つと、機械の速さで結果が変わる**
+    pub fn ready_until(&self) -> u64 {
+        self.shared.ready.load(Ordering::Relaxed)
     }
 
     /// 書き出しと同じ音圧で聞くための倍率。裏で測り終えるまでは 1.0。

@@ -61,6 +61,14 @@ pub struct Shared {
     pub makeup: AtomicU32,
     /// 止まらない時計。鍵を押した音はこちらへ乗せる
     pub clock: AtomicU64,
+    /// **先回り係がどこまで作り終えたか（サンプル）。**
+    ///
+    /// ここより手前を鳴らすぶんには、音符は全部届いている。ここより先は
+    /// まだ作っていないので、鳴らせば無音になる。
+    ///
+    /// 出口は待てないので（待つ＝音が途切れる）、これを見るのは試験と
+    /// 画面だけ。**時計ではなくこれで待てば、機械の速さに左右されない**
+    pub ready: AtomicU64,
 }
 
 impl Shared {
@@ -90,6 +98,7 @@ impl Default for Shared {
             clock: AtomicU64::new(0),
             countdown: AtomicU64::new(0),
             click: AtomicU32::new(0f32.to_bits()),
+            ready: AtomicU64::new(0),
         }
     }
 }

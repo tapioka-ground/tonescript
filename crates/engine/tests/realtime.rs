@@ -41,9 +41,13 @@ const SRC: &str = r#"
 
 /// **この試験は1つずつ走らせる。**
 ///
-/// どれも「間に合っているか」を時計で測っている。同時に何本も走らせると、
-/// 測っているのは engine ではなく機械の混み具合になる。
-/// 1本ずつ走る限り、これらは何度回しても同じ結果になる。
+/// 時計を見ている所（[`every_block_is_ready_before_the_deadline`] と
+/// 鍵を押したときの遅れ）があるので、同時に走らせると、測っているのが
+/// engine ではなく機械の混み具合になる。
+///
+/// 音そのものを測る試験は時計に頼らない（[`pull`] を見よ）。
+/// 前はどれも `sleep` で間を空けていて、機械が変わると走らせるたびに
+/// 違う試験が落ちた。
 static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
 fn solo() -> MutexGuard<'static, ()> {
@@ -66,22 +70,54 @@ fn song() -> (Arc<Song>, Arc<arrange::Score>) {
     (Arc::new(s), Arc::new(score))
 }
 
-/// 出口の代わり。`block` サンプルずつ、間を空けて引き取る。
+/// 出口の代わり。`block` サンプルずつ引き取る。
 ///
-/// 間を空けるのは、先回り係に作る時間を与えるため。実際の出口も
-/// 「1ブロック鳴らすあいだ待つ」ので、同じことをしている。
-fn pull(m: &mut Mixer, blocks: usize, block: usize, pace: Duration) -> (Vec<f32>, Vec<f32>) {
+/// **先回り係が作り終えるのを待ってから引き取る。**
+///
+/// 前はここで `sleep` して「だいたいこれくらい待てば作り終えているはず」
+/// としていた。それだと待ち時間の精度と機械の速さで結果が変わり、
+/// 走らせるたびに違う試験が落ちる。数か月置いた機械で実際そうなった。
+///
+/// 見るのは [`Engine::ready_until`]。時計ではなく**作り終えた印**で待てば、
+/// 速い機械でも遅い機械でも同じ音が出てくる。
+///
+/// 実際の出口は待てない（待つ＝音が途切れる）ので、これは試験だけの都合。
+/// 間に合っているかどうかは
+/// [`every_block_is_ready_before_the_deadline`] で見ている。
+fn pull(e: &Engine, m: &mut Mixer, blocks: usize, block: usize) -> (Vec<f32>, Vec<f32>) {
     let (mut l, mut r) = (Vec::new(), Vec::new());
     let (mut bl, mut br) = (vec![0.0; block], vec![0.0; block]);
     for _ in 0..blocks {
+        wait_ready(e, block);
         m.fill(&mut bl, &mut br);
         l.extend_from_slice(&bl);
         r.extend_from_slice(&br);
-        if !pace.is_zero() {
-            std::thread::sleep(pace);
-        }
     }
     (l, r)
+}
+
+/// このブロックぶんが作り終わるまで待つ。
+///
+/// 止まっているときは**少しだけ時間を渡す。**
+///
+/// 鍵を押した音には「どこまで作った」の印が無い。押しっぱなしのあいだ、
+/// 係は止まらない時計を見て作り足しているので、こちらが一息に引き取ると
+/// 作り足す間が無い。実際の出口は 1 ブロック鳴らすのに 21ms 掛かるので、
+/// そのぶんは係に回っている。ここでもそれを真似る。
+///
+/// 譜面を鳴らしている間は印があるので、時計には頼らない
+fn wait_ready(e: &Engine, block: usize) {
+    if !e.is_playing() {
+        std::thread::sleep(Duration::from_millis(2));
+        return;
+    }
+    let t0 = Instant::now();
+    while t0.elapsed() < Duration::from_millis(800) {
+        if e.ready_until() >= e.position() + block as u64 {
+            return;
+        }
+        std::thread::sleep(Duration::from_micros(200));
+    }
 }
 
 fn peak(x: &[f32]) -> f32 {
@@ -102,7 +138,7 @@ fn nothing_comes_out_until_play_is_pressed() {
     let (mut e, mut m) = Engine::new();
     e.set_song(s, sc);
     std::thread::sleep(Duration::from_millis(60));
-    let (l, r) = pull(&mut m, 8, 512, Duration::from_millis(2));
+    let (l, r) = pull(&e, &mut m, 8, 512);
     assert_eq!(peak(&l), 0.0, "止まっているのに鳴った");
     assert_eq!(peak(&r), 0.0);
     assert_eq!(e.position(), 0, "止まっているのに進んだ");
@@ -117,7 +153,7 @@ fn pressing_play_makes_sound() {
     // 先回り係が最初のぶんを作るのを待つ
     std::thread::sleep(Duration::from_millis(80));
     e.play();
-    let (l, _r) = pull(&mut m, 40, 1024, Duration::from_millis(4));
+    let (l, _r) = pull(&e, &mut m, 40, 1024);
     assert!(peak(&l) > 0.01, "鳴っていない（ピーク {}）", peak(&l));
     assert!(e.position() > 0, "位置が進んでいない");
 }
@@ -132,12 +168,12 @@ fn a_key_press_sounds_even_while_stopped() {
     std::thread::sleep(Duration::from_millis(60));
 
     // まず、何もしなければ無音
-    let (quiet, _) = pull(&mut m, 4, 1024, Duration::from_millis(2));
+    let (quiet, _) = pull(&e, &mut m, 4, 1024);
     assert_eq!(peak(&quiet), 0.0, "何もしていないのに鳴った");
 
     e.note_on("lead", 72, 110, 0.3);
     std::thread::sleep(Duration::from_millis(60));
-    let (l, r) = pull(&mut m, 20, 1024, Duration::from_millis(2));
+    let (l, r) = pull(&e, &mut m, 20, 1024);
     assert!(peak(&l) > 0.01, "押した音が返らない（ピーク {}）", peak(&l));
     assert!(peak(&r) > 0.01);
     // 止まったままであること。押しただけで走り出さない
@@ -172,6 +208,76 @@ fn a_key_sounds_quickly_after_it_is_pressed() {
     assert!(waited < Duration::from_millis(50), "音が出るまで {waited:?} 掛かった");
 }
 
+/// **間に合っているか。**
+///
+/// 出口は待ってくれない。256 サンプルの口なら、次が来るまでの 5.33ms の
+/// 間に 1 ブロック作り終えていなければ、そこが無音になる（プツと鳴る）。
+///
+/// 引き取り方から時計を外したので、間に合っているかはここで見る。
+/// 前はブロックごとに `sleep` していて、それが暗にこの試験を兼ねていた
+/// 「どこまで作ったか」の印が、**本当に進むこと。**
+///
+/// ここが動かないと、待つ側は待ちっぱなしになる（そして時計の待ちへ
+/// 戻ったのと同じことになり、静かに元の不安定さへ戻る）
+#[test]
+fn the_ready_mark_moves_ahead_of_the_playhead() {
+    let _one = solo();
+    let (s, sc) = song();
+    let (mut e, mut m) = Engine::new();
+    e.set_song(s, sc);
+    std::thread::sleep(Duration::from_millis(200));
+    // 止まっているうちは進まない
+    e.play();
+
+    let t0 = Instant::now();
+    while e.ready_until() == 0 && t0.elapsed() < Duration::from_secs(5) {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(e.ready_until() > 0, "印がいつまでも 0 のまま");
+
+    // 少し鳴らしても、印は再生位置より先に居ること
+    let _ = pull(&e, &mut m, 20, 1024);
+    let pos = e.position();
+    let ready = e.ready_until();
+    assert!(ready > pos, "印 {ready} が再生位置 {pos} を追い越されている");
+    // 先回りは 0.3 秒ぶん。半分も残っていないなら追いつかれかけている
+    let ahead = (ready - pos) as f32 / SR;
+    assert!(ahead > 0.1, "先回りが {ahead:.3} 秒しかない");
+}
+
+#[test]
+fn every_block_is_ready_before_the_deadline() {
+    let _one = solo();
+    let (s, sc) = song();
+    let (mut e, mut m) = Engine::new();
+    e.set_song(s, sc);
+    std::thread::sleep(Duration::from_millis(200));
+    e.play();
+
+    let block = 256;
+    let deadline = Duration::from_secs_f64(block as f64 / SR as f64);
+    let (mut bl, mut br) = (vec![0.0; block], vec![0.0; block]);
+    let mut worst = Duration::ZERO;
+    let mut total = Duration::ZERO;
+    let n = 400;
+    for _ in 0..n {
+        wait_ready(&e, block);
+        let t0 = Instant::now();
+        m.fill(&mut bl, &mut br);
+        let took = t0.elapsed();
+        worst = worst.max(took);
+        total += took;
+    }
+    let avg = total / n;
+    eprintln!(
+        "[間に合い] 一番遅い {:.3}ms / 平均 {:.3}ms / 締切 {:.2}ms",
+        worst.as_secs_f64() * 1000.0,
+        avg.as_secs_f64() * 1000.0,
+        deadline.as_secs_f64() * 1000.0
+    );
+    assert!(worst < deadline, "1ブロック作るのに {worst:?} 掛かった（締切 {deadline:?}）");
+}
+
 #[test]
 fn a_long_hold_is_seamless() {
     let _one = solo();
@@ -186,7 +292,7 @@ fn a_long_hold_is_seamless() {
     std::thread::sleep(Duration::from_millis(60));
 
     // 最初のぶん（0.3秒）をまたいで、1.2 秒ぶん鳴らす
-    let (l, _r) = pull(&mut m, 60, 1024, Duration::from_millis(3));
+    let (l, _r) = pull(&e, &mut m, 60, 1024);
     let n = l.len();
     assert!(peak(&l[..1024]) > 0.005, "鳴り出していない");
     // 継ぎ目があるあたり（0.19秒 = 0.3秒の62%）でも途切れていないこと
@@ -226,18 +332,18 @@ fn a_held_key_keeps_sounding_until_it_is_released() {
 
     e.key_down("lead", 67, 100);
     std::thread::sleep(Duration::from_millis(60));
-    let (a, _) = pull(&mut m, 12, 1024, Duration::from_millis(2));
+    let (a, _) = pull(&e, &mut m, 12, 1024);
     assert!(peak(&a) > 0.01, "押しても鳴らない");
 
     // 押しっぱなし。まだ鳴っている
-    let (b, _) = pull(&mut m, 12, 1024, Duration::from_millis(2));
+    let (b, _) = pull(&e, &mut m, 12, 1024);
     assert!(peak(&b) > 0.005, "押しっぱなしなのに消えた");
 
     e.key_up("lead", 67);
     std::thread::sleep(Duration::from_millis(40));
     // 消えるまで（下げるのに 0.025 秒）
-    pull(&mut m, 8, 1024, Duration::from_millis(2));
-    let (c, _) = pull(&mut m, 8, 1024, Duration::from_millis(2));
+    pull(&e, &mut m, 8, 1024);
+    let (c, _) = pull(&e, &mut m, 8, 1024);
     assert!(peak(&c) < 1e-4, "離しても鳴り続けている（ピーク {}）", peak(&c));
 }
 
@@ -250,10 +356,10 @@ fn releasing_a_different_key_does_not_stop_this_one() {
     std::thread::sleep(Duration::from_millis(60));
     e.key_down("lead", 67, 100);
     std::thread::sleep(Duration::from_millis(60));
-    pull(&mut m, 4, 1024, Duration::from_millis(2));
+    pull(&e, &mut m, 4, 1024);
     e.key_up("lead", 60); // 押していない音
     std::thread::sleep(Duration::from_millis(40));
-    let (a, _) = pull(&mut m, 8, 1024, Duration::from_millis(2));
+    let (a, _) = pull(&e, &mut m, 8, 1024);
     assert!(peak(&a) > 0.005, "関係ない鍵で消えた");
 }
 
@@ -266,11 +372,11 @@ fn a_fader_moves_while_it_is_playing() {
     e.set_song(s, sc);
     std::thread::sleep(Duration::from_millis(80));
     e.play();
-    let (loud, _) = pull(&mut m, 24, 1024, Duration::from_millis(4));
+    let (loud, _) = pull(&e, &mut m, 24, 1024);
 
     e.set_master_gain(0.1);
     std::thread::sleep(Duration::from_millis(20));
-    let (soft, _) = pull(&mut m, 24, 1024, Duration::from_millis(4));
+    let (soft, _) = pull(&e, &mut m, 24, 1024);
 
     assert!(rms(&loud) > 0.0, "そもそも鳴っていない");
     assert!(
@@ -289,13 +395,13 @@ fn muting_a_part_takes_effect_at_once() {
     e.set_song(s, sc);
     std::thread::sleep(Duration::from_millis(80));
     e.play();
-    let (with, _) = pull(&mut m, 20, 1024, Duration::from_millis(4));
+    let (with, _) = pull(&e, &mut m, 20, 1024);
 
     for p in ["lead", "bass", "drums", "perc"] {
         e.set_audible(p, false);
     }
     std::thread::sleep(Duration::from_millis(20));
-    let (without, _) = pull(&mut m, 20, 1024, Duration::from_millis(4));
+    let (without, _) = pull(&e, &mut m, 20, 1024);
 
     assert!(rms(&with) > 0.0, "そもそも鳴っていない");
     assert!(rms(&without) < rms(&with) * 0.2, "全部ミュートしたのに鳴っている");
@@ -309,11 +415,11 @@ fn seeking_starts_from_there_and_drops_the_old_sound() {
     e.set_song(s, sc);
     std::thread::sleep(Duration::from_millis(80));
     e.play();
-    pull(&mut m, 10, 1024, Duration::from_millis(4));
+    pull(&e, &mut m, 10, 1024);
 
     let want = (0.9 * SR) as u64;
     e.seek(want);
-    let (_l, _r) = pull(&mut m, 2, 256, Duration::from_millis(2));
+    let (_l, _r) = pull(&e, &mut m, 2, 256);
     let now = e.position();
     assert!(now >= want && now < want + 4096, "頭出しした所から鳴っていない: {now}");
 }
@@ -328,7 +434,7 @@ fn the_end_of_the_song_stops_it() {
     // 終わりの少し手前から
     e.seek(e.total().saturating_sub(2048));
     e.play();
-    pull(&mut m, 8, 1024, Duration::from_millis(1));
+    pull(&e, &mut m, 8, 1024);
     assert!(!e.is_playing(), "終わっても止まらない");
     assert!(e.took_end(), "終わったことが伝わっていない");
     assert!(!e.took_end(), "一度見たら下りるはず");
@@ -347,7 +453,7 @@ fn a_loop_keeps_coming_back() {
     e.seek(from);
     e.play();
     // 輪の長さ（0.4秒）の何倍も回す
-    pull(&mut m, 60, 1024, Duration::from_millis(2));
+    pull(&e, &mut m, 60, 1024);
     let pos = e.position();
     assert!(e.is_playing(), "繰り返しているのに止まった");
     assert!(pos >= from && pos <= to + 1024, "輪の外へ出た: {pos}");
@@ -380,7 +486,7 @@ fn recorded_audio_plays_and_stops_with_the_transport() {
 
     // まだ足していない。黙っているはず
     e.play();
-    let (none, _) = pull(&mut m, 10, 1024, Duration::from_millis(2));
+    let (none, _) = pull(&e, &mut m, 10, 1024);
     assert!(peak(&none) < 1e-4, "譜面を黙らせたのに鳴っている: {}", peak(&none));
 
     // 足すと鳴る
@@ -389,12 +495,12 @@ fn recorded_audio_plays_and_stops_with_the_transport() {
     e.set_audio(vec![track(1.0, &tone)]);
     std::thread::sleep(Duration::from_millis(40));
     e.play();
-    let (with, _) = pull(&mut m, 10, 1024, Duration::from_millis(2));
+    let (with, _) = pull(&e, &mut m, 10, 1024);
     assert!(peak(&with) > 0.05, "足した音が鳴っていない: {}", peak(&with));
 
     // 止めれば歌も止まる
     e.stop();
-    let (quiet, _) = pull(&mut m, 4, 1024, Duration::from_millis(2));
+    let (quiet, _) = pull(&e, &mut m, 4, 1024);
     assert_eq!(peak(&quiet), 0.0, "止めたのに歌だけ鳴っている");
 
     // 音量 0 なら鳴らない
@@ -402,7 +508,7 @@ fn recorded_audio_plays_and_stops_with_the_transport() {
     e.set_audio(vec![track(0.0, &tone)]);
     std::thread::sleep(Duration::from_millis(40));
     e.play();
-    let (zero, _) = pull(&mut m, 10, 1024, Duration::from_millis(2));
+    let (zero, _) = pull(&e, &mut m, 10, 1024);
     assert!(peak(&zero) < 1e-4, "音量 0 にしたのに鳴っている: {}", peak(&zero));
 }
 
@@ -433,14 +539,14 @@ fn recorded_audio_lines_up_with_the_song() {
     // 0.7 秒目から鳴らす。頭出しした所の中身が出ること
     e.seek((0.7 * SR) as u64);
     e.play();
-    let (l, _) = pull(&mut m, 8, 1024, Duration::from_millis(2));
+    let (l, _) = pull(&e, &mut m, 8, 1024);
     assert!(peak(&l) > 0.05, "頭出しした所の音が出ていない");
 
     // 0.1 秒目からなら、まだ無音の所
     e.stop();
     e.seek((0.1 * SR) as u64);
     e.play();
-    let (early, _) = pull(&mut m, 4, 1024, Duration::from_millis(2));
+    let (early, _) = pull(&e, &mut m, 4, 1024);
     assert!(early.len() < quiet, "測る範囲が無音より長い");
     assert!(peak(&early) < 1e-4, "無音のはずの所で鳴った: {}", peak(&early));
 }
@@ -459,7 +565,7 @@ fn the_metronome_ticks_on_the_beat() {
     settle();
     // まず、切ってあれば鳴らない
     e.play();
-    let (off, _) = pull(&mut m, 20, 1024, Duration::from_millis(3));
+    let (off, _) = pull(&e, &mut m, 20, 1024);
     assert!(peak(&off) < 1e-4, "切ってあるのに鳴った: {}", peak(&off));
 
     e.stop();
@@ -468,7 +574,7 @@ fn the_metronome_ticks_on_the_beat() {
     std::thread::sleep(Duration::from_millis(60));
     e.play();
     // 120BPM の4分音符 = 0.5秒ごと。2秒ぶんで4打
-    let (on, _) = pull(&mut m, 100, 1024, Duration::from_millis(2));
+    let (on, _) = pull(&e, &mut m, 100, 1024);
     assert!(peak(&on) > 0.05, "メトロノームが鳴っていない");
 
     // 打点の数を数える。0.5秒ごとに山があること
@@ -508,11 +614,11 @@ fn counting_in_starts_the_song_by_itself() {
     assert!(!e.is_playing(), "数える前に鳴り出した");
 
     // 1秒ぶん回しても、まだ曲は進んでいない
-    pull(&mut m, 47, 1024, Duration::from_millis(1));
+    pull(&e, &mut m, 47, 1024);
     assert_eq!(e.position(), 0, "数えている最中に曲が進んだ");
 
     // 残りを回すと、勝手に鳴り始める
-    pull(&mut m, 60, 1024, Duration::from_millis(1));
+    pull(&e, &mut m, 60, 1024);
     assert!(!e.counting_in(), "数え終わっていない");
     assert!(e.is_playing(), "数え終わったのに鳴り始めない");
     assert!(e.position() > 0, "位置が進んでいない");
@@ -529,7 +635,7 @@ fn a_count_in_can_be_called_off() {
     std::thread::sleep(Duration::from_millis(40));
     assert!(e.counting_in());
     e.cancel_count();
-    pull(&mut m, 20, 1024, Duration::from_millis(1));
+    pull(&e, &mut m, 20, 1024);
     assert!(!e.counting_in());
     assert!(!e.is_playing(), "やめたのに鳴り出した");
     assert_eq!(e.position(), 0);
@@ -569,7 +675,7 @@ fn seeking_does_not_stack_the_notes_on_top_of_each_other() {
         e.seek(0);
         std::thread::sleep(Duration::from_millis(250));
         e.play();
-        let (l, _) = pull(m, 25, 1024, Duration::from_millis(3));
+        let (l, _) = pull(e, m, 25, 1024);
         e.stop();
         rms(&l)
     };
@@ -597,7 +703,7 @@ fn the_pan_knob_moves_the_sound_while_it_plays() {
     }
     settle();
     e.play();
-    let (l, r) = pull(&mut m, 20, 1024, Duration::from_millis(3));
+    let (l, r) = pull(&e, &mut m, 20, 1024);
     assert!(rms(&l) > 0.001, "鳴っていない");
     assert!(rms(&r) < rms(&l) * 0.1, "左いっぱいなのに右が鳴っている");
 
@@ -609,7 +715,7 @@ fn the_pan_knob_moves_the_sound_while_it_plays() {
     }
     settle();
     e.play();
-    let (l2, r2) = pull(&mut m, 20, 1024, Duration::from_millis(3));
+    let (l2, r2) = pull(&e, &mut m, 20, 1024);
     assert!(rms(&l2) < rms(&r2) * 0.1, "右いっぱいなのに左が鳴っている");
     // 振っても全体の大きさは変わらない（等出力）
     let a = (rms(&l) * rms(&l) + rms(&r) * rms(&r)).sqrt();
@@ -639,7 +745,7 @@ fn the_compressor_evens_out_the_level_while_it_plays() {
         e.seek(0);
         std::thread::sleep(Duration::from_millis(250));
         e.play();
-        let (l, _) = pull(m, 30, 1024, Duration::from_millis(3));
+        let (l, _) = pull(e, m, 30, 1024);
         e.stop();
         l
     };
@@ -719,7 +825,7 @@ fn the_eq_changes_the_sound_while_it_plays() {
 
     // 素のまま
     e.play();
-    let (flat, _) = pull(&mut m, 30, 1024, Duration::from_millis(3));
+    let (flat, _) = pull(&e, &mut m, 30, 1024);
     e.stop();
     e.seek(0);
 
@@ -729,7 +835,7 @@ fn the_eq_changes_the_sound_while_it_plays() {
     }
     settle();
     e.play();
-    let (dull, _) = pull(&mut m, 30, 1024, Duration::from_millis(3));
+    let (dull, _) = pull(&e, &mut m, 30, 1024);
 
     // **高い帯だけ取り出して測る。** 全体の実効値では、削った帯の
     // 割合が小さいと差が埋もれる
@@ -766,11 +872,11 @@ fn the_meters_say_what_actually_came_out() {
 
     // 止まっているあいだは振れない
     let _ = e.meters().take_master();
-    pull(&mut m, 4, 1024, Duration::from_millis(2));
+    pull(&e, &mut m, 4, 1024);
     assert_eq!(e.meters().take_master(), (0.0, 0.0), "止まっているのに針が振れた");
 
     e.play();
-    let (l, r) = pull(&mut m, 30, 1024, Duration::from_millis(4));
+    let (l, r) = pull(&e, &mut m, 30, 1024);
     let (ml, mr) = e.meters().take_master();
     // 針は「読むまでの一番大きかった所」。実際に出た音と合うこと
     assert!((ml - peak(&l)).abs() < 1e-5, "左の針 {ml} / 実際 {}", peak(&l));
@@ -780,7 +886,7 @@ fn the_meters_say_what_actually_came_out() {
 
     // パートごとの針も振れていること
     let lead = e.plan().part_of("lead").expect("lead が無い");
-    pull(&mut m, 20, 1024, Duration::from_millis(4));
+    pull(&e, &mut m, 20, 1024);
     assert!(e.meters().take_part(lead) > 0.0, "パートの針が振れない");
 }
 
@@ -797,7 +903,7 @@ fn the_loudness_meter_agrees_with_the_audio_it_measured() {
     e.set_song(s, sc);
     std::thread::sleep(Duration::from_millis(400));
     e.play();
-    let (l, r) = pull(&mut m, 60, 1024, Duration::from_millis(3));
+    let (l, r) = pull(&e, &mut m, 60, 1024);
     let now = e.meters().lufs();
 
     // 最後の 400ミリ秒を、書き出し側の lufs() で測る
@@ -841,7 +947,7 @@ fn what_you_hear_is_what_gets_written() {
     std::thread::sleep(Duration::from_millis(400));
     e.play();
     let blocks = (e.total() as usize / 1024) + 2;
-    let (rl, rr) = pull(&mut m, blocks, 1024, Duration::from_millis(3));
+    let (rl, rr) = pull(&e, &mut m, blocks, 1024);
 
     let n = off.l.len().min(rl.len());
     assert!(n > SR as usize, "短すぎる: {n}");
@@ -923,7 +1029,7 @@ fn the_bus_fader_is_heard_while_it_plays() {
         e.seek(0);
         std::thread::sleep(Duration::from_millis(250));
         e.play();
-        let (l, _) = pull(m, 30, 1024, Duration::from_millis(3));
+        let (l, _) = pull(e, m, 30, 1024);
         e.stop();
         l
     };
@@ -953,7 +1059,7 @@ fn the_bus_eq_is_heard_while_it_plays() {
     wait_makeup(&e);
 
     e.play();
-    let (flat, _) = pull(&mut m, 30, 1024, Duration::from_millis(3));
+    let (flat, _) = pull(&e, &mut m, 30, 1024);
     e.stop();
     e.seek(0);
 
@@ -963,7 +1069,7 @@ fn the_bus_eq_is_heard_while_it_plays() {
     e.set_bus("g", cfg);
     settle();
     e.play();
-    let (dull, _) = pull(&mut m, 30, 1024, Duration::from_millis(3));
+    let (dull, _) = pull(&e, &mut m, 30, 1024);
     e.stop();
 
     // 高い帯だけ取り出す。ハイパスは4段（1段では緩すぎて差が埋もれる）
@@ -1002,7 +1108,7 @@ fn a_bused_song_is_heard_the_way_it_is_written() {
     std::thread::sleep(Duration::from_millis(400));
     e.play();
     let blocks = (e.total() as usize / 1024) + 2;
-    let (rl, rr) = pull(&mut m, blocks, 1024, Duration::from_millis(3));
+    let (rl, rr) = pull(&e, &mut m, blocks, 1024);
 
     let n = off.l.len().min(rl.len());
     assert!(n > SR as usize, "短すぎる: {n}");

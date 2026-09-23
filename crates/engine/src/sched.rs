@@ -199,6 +199,7 @@ impl Sched {
         let pos = self.shared.pos.load(Ordering::Relaxed);
         self.upto = pos;
         self.last_pos = pos;
+        self.shared.ready.store(pos, Ordering::Relaxed);
         let plan = self.plan.clone();
         for p in &mut self.parts {
             // その位置以降の最初の音符を探す
@@ -225,6 +226,8 @@ impl Sched {
                 return;
             }
         }
+        // 全部渡し終えた。ここまでは本当に鳴らせる
+        self.shared.ready.store(self.upto, Ordering::Relaxed);
     }
 
     /// 先回りぶんを作る。
@@ -285,6 +288,11 @@ impl Sched {
         }
         self.upto = until;
         self.fill_clicks(until);
+        // **渡し終えてから知らせる。** 輪が一杯で持ち越しているうちは、
+        // 作ってはあっても音側には届いていない
+        if self.pending.is_empty() {
+            self.shared.ready.store(until, Ordering::Relaxed);
+        }
     }
 
     /// 鍵を押した。まず短く作って鳴らし、押されているあいだ作り足す。
