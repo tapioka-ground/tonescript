@@ -36,6 +36,12 @@ use crate::voice::{self, Msg, Voice};
 /// どれだけ先まで作っておくか。
 const LOOKAHEAD: f64 = 0.30;
 
+/// 音圧を測り始めるまでの待ち。
+///
+/// 譜面が変わってから、これだけ何も来なければ測る。引きずっている間の
+/// 何十回ぶんが、離したあとの1回にまとまる
+const MEASURE_WAIT: Duration = Duration::from_millis(450);
+
 /// 押した瞬間に作る長さ。**短いほど指と音のずれが小さい。**
 /// ピアノで 0.3 秒ぶんは 4ミリ秒で作れる。
 const FIRST: f32 = 0.30;
@@ -117,6 +123,12 @@ struct Sched {
     click_next: u64,
     /// 前に見た再生位置。**戻っていたら**繰り返しの折り返し
     last_pos: u64,
+    /// 音圧を測っている最中か。**同時に1本まで**にするための旗
+    measuring: Arc<std::sync::atomic::AtomicBool>,
+    /// 次に測るぶん（最後の1つだけ覚える）
+    remeasure: Option<(Arc<Song>, Arc<Score>, Vec<String>)>,
+    /// いつ測り始めるか。これより前は待つ
+    measure_at: Option<std::time::Instant>,
     /// 音圧の測定を頼む先
     back: Sender<Cmd>,
 }
@@ -139,7 +151,38 @@ impl Sched {
         self.song = Some(song.clone());
         self.send(Msg::Plan(self.plan.clone()));
         self.restart();
-        self.measure(song, score, names);
+        // **すぐには測らない。** 静かになってから1回（`want_measure` を見よ）
+        self.want_measure(song, score, names);
+    }
+
+    /// 音圧を測り直したい。**ただし静かになってから。**
+    ///
+    /// 譜面は画面で音符を引きずっている間、1フレームごとに届く。そのたびに
+    /// 測ると、曲まるごとを作る仕事が毎秒60回立つ。1本でも 54秒7パートで
+    /// 150MB を超えるので、機械の覚えがあっという間に尽きる
+    /// （実際 32GB が 99% まで埋まった）。
+    ///
+    /// なので**最後の1つだけ覚えて、しばらく何も来なくなってから**測る。
+    /// 引きずり終わってから 1回で済む。遅れて効くが、これは書き出しと
+    /// 同じ音圧で聞くための倍率なので、少し遅れて合っても困らない
+    fn want_measure(&mut self, song: Arc<Song>, score: Arc<Score>, names: Vec<String>) {
+        self.remeasure = Some((song, score, names));
+        self.measure_at = Some(std::time::Instant::now() + MEASURE_WAIT);
+    }
+
+    /// 待ちが明けたら測り始める。輪の中から呼ぶ。
+    fn tick_measure(&mut self) {
+        if self.measuring.load(Ordering::Relaxed) {
+            return; // **同時に1本まで**
+        }
+        let Some(at) = self.measure_at else { return };
+        if std::time::Instant::now() < at {
+            return;
+        }
+        self.measure_at = None;
+        if let Some((song, score, names)) = self.remeasure.take() {
+            self.measure(song, score, names);
+        }
     }
 
     /// 書き出したときと同じ音で聞けるように、裏で1回だけ測る。
@@ -152,10 +195,22 @@ impl Sched {
     /// どちらも曲を1回作れば出る。作るのに 0.24 秒しか掛からないので、
     /// 読み込んだ裏で1回走らせて、出た数字を音側へ渡す。
     /// **速いからこそ取れる手。**
-    fn measure(&self, song: Arc<Song>, score: Arc<Score>, names: Vec<String>) {
+    fn measure(&mut self, song: Arc<Song>, score: Arc<Score>, names: Vec<String>) {
+        // ここへ来るのは [`Sched::tick_measure`] からだけ。
+        // 待ちと「同時に1本」はあちらで見ている
+        self.measuring.store(true, Ordering::Relaxed);
+        let busy = self.measuring.clone();
         let back = self.back.clone();
         let target = song.master_lufs;
         std::thread::spawn(move || {
+            // 落ちても旗を戻す。戻さないと二度と測らなくなる
+            struct Done(Arc<std::sync::atomic::AtomicBool>);
+            impl Drop for Done {
+                fn drop(&mut self) {
+                    self.0.store(false, Ordering::Relaxed);
+                }
+            }
+            let _done = Done(busy);
             let quiet = |_: &str| {};
             let mut stems = tonescript_render::render_stems(&song, &score, &quiet);
             // 尖り止めは「実効値の何倍まで許すか」。打楽器は頭が命なので掛けない
@@ -183,6 +238,10 @@ impl Sched {
     }
 
     fn measured(&mut self, makeup: f32, trim: Vec<Option<(f32, f32)>>) {
+        // 測っている間に譜面が変わっていたら、また待ちを置いてから測る
+        if self.remeasure.is_some() {
+            self.measure_at = Some(std::time::Instant::now() + MEASURE_WAIT);
+        }
         // 音側は共有の数字として読む。画面が設定を差し替えても消えない
         self.shared.set_makeup(makeup);
         self.send(Msg::Trim(trim));
@@ -515,6 +574,9 @@ pub(crate) fn spawn(
                 held: Vec::new(),
                 click_next: 0,
                 last_pos: 0,
+                measuring: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                remeasure: None,
+                measure_at: None,
                 back,
             };
             loop {
@@ -541,6 +603,7 @@ pub(crate) fn spawn(
                 s.flush_pending();
                 s.fill_ahead();
                 s.extend_held();
+                s.tick_measure();
             }
         })
         .expect("係のスレッドが立てられません")

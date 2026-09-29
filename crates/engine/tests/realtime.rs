@@ -936,15 +936,13 @@ fn what_you_hear_is_what_gets_written() {
     // 鳴らす側
     let (mut e, mut m) = Engine::new();
     e.set_song(s.clone(), sc.clone());
-    // 音圧の測り直しが終わるのを待つ（裏で曲を1回作っている）
-    let t0 = Instant::now();
-    while t0.elapsed() < Duration::from_secs(20) {
-        std::thread::sleep(Duration::from_millis(50));
-        if e.plan().total > 0 {
-            break;
-        }
-    }
-    std::thread::sleep(Duration::from_millis(400));
+    // **音圧の測り直しが終わるのを待つ。**
+    //
+    // 裏で曲を1回作っている。待たずに始めると、鳴らしている途中で倍率が
+    // 変わって、前半と後半で大きさが違う音を書き出しと比べることになる
+    //（相関が 0.97 を割る）。時計で待つと、測り始めを遅らせた途端に
+    // また当たらなくなるので、**倍率が入ったことそのもの**を待つ
+    wait_makeup(&e);
     e.play();
     let blocks = (e.total() as usize / 1024) + 2;
     let (rl, rr) = pull(&e, &mut m, blocks, 1024);
@@ -1098,14 +1096,8 @@ fn a_bused_song_is_heard_the_way_it_is_written() {
 
     let (mut e, mut m) = Engine::new();
     e.set_song(s.clone(), sc.clone());
-    let t0 = Instant::now();
-    while t0.elapsed() < Duration::from_secs(20) {
-        std::thread::sleep(Duration::from_millis(50));
-        if e.plan().total > 0 {
-            break;
-        }
-    }
-    std::thread::sleep(Duration::from_millis(400));
+    // 倍率が入るのを待つ（[`what_you_hear_is_what_gets_written`] を見よ）
+    wait_makeup(&e);
     e.play();
     let blocks = (e.total() as usize / 1024) + 2;
     let (rl, rr) = pull(&e, &mut m, blocks, 1024);

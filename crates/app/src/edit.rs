@@ -814,6 +814,43 @@ const GRAB_ROWS: i32 = 1;
 ///
 /// 帯は音符の幅の 4割までにする。短い音符で帯が全体を覆うと、
 /// 今度は動かせなくなる
+/// そこで引きずったら何が起きるか。
+///
+/// **矢印もこれで決める。** 前は矢印と掴みで別々に見ていたので、
+/// 矢印は「伸ばせます」なのに引きずると動く、逆に何も出ていないのに
+/// 伸びる、ということが起きていた
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum What {
+    /// 右端を掴んで長さを変える
+    Resize(usize),
+    /// 掴んで動かす
+    Move(usize),
+    /// 何も無いので、四角で囲んで選ぶ
+    Select,
+}
+
+/// 押した所で何が起きるか。
+///
+/// **これ1つを、矢印を出す側と掴む側の両方が呼ぶ。**
+pub fn what_at(ns: &[Note], pitch: i32, x: f32, step: f32, v: &View) -> What {
+    if let Some(i) = edge_at(ns, pitch, x, v) {
+        return What::Resize(i);
+    }
+    // 中を掴む。段を1つ外しても拾う
+    let over = |n: &Note| (n.pos as f32) <= step && step < (n.pos + n.len.max(1)) as f32;
+    let hit = ns
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| (n.pitch - pitch).abs() <= GRAB_ROWS && over(n))
+        // ぴったりの段を優先し、同じなら先に置いたものを
+        .min_by_key(|(i, n)| ((n.pitch - pitch).abs(), *i))
+        .map(|(i, _)| i);
+    match hit {
+        Some(i) => What::Move(i),
+        None => What::Select,
+    }
+}
+
 fn edge_at(ns: &[Note], pitch: i32, x: f32, v: &View) -> Option<usize> {
     ns.iter().position(|n| {
         if (n.pitch - pitch).abs() > GRAB_ROWS {
@@ -906,17 +943,6 @@ fn handle_input(
         let ns = project.notes.get(&part_name)?;
         ns.iter().position(|n| n.pitch == pitch && over(n))
     };
-    // 掴むとき用。**段を1つ外しても拾う。**
-    // 置くときの [`hit`] は緩めない（すぐ隣へ置けなくなる）
-    let grab_hit = |project: &Project| -> Option<usize> {
-        let ns = project.notes.get(&part_name)?;
-        ns.iter()
-            .enumerate()
-            .filter(|(_, n)| (n.pitch - pitch).abs() <= GRAB_ROWS && over(n))
-            // ぴったりの段を優先し、同じなら先に置いたものを
-            .min_by_key(|(i, n)| ((n.pitch - pitch).abs(), *i))
-            .map(|(i, _)| i)
-    };
 
     // --- 右クリックで消す。選んでいるものの上なら、選んだぶん全部
     if resp.secondary_clicked() {
@@ -938,10 +964,17 @@ fn handle_input(
     // --- 掴む
     if resp.drag_started() {
         ensure(project, ed);
-        // 右端が先。中に居るかどうかはそのあと
+        // **押した所で決める。**
+        //
+        // egui は指が数ピクセル動いてから「引きずり始めた」と言う。その
+        // ときの指の位置は、押した所からもう離れている。今の位置で決めると、
+        // 端を押して横へ引いた瞬間に帯から出て、動かす方になる
+        //（矢印は端のままなので、余計に分からない）
+        let start = ui.input(|i| i.pointer.press_origin()).unwrap_or(pos);
+        let (s_step, s_pitch) = (v.step_at(start.x), v.pitch_at(start.y));
         let ns = project.notes.get(&ed.part).cloned().unwrap_or_default();
-        let on_edge = edge_at(&ns, pitch, pos.x, v);
-        if let Some(i) = on_edge.or_else(|| grab_hit(project)) {
+        let what = what_at(&ns, s_pitch, start.x, s_step, v);
+        if let What::Resize(i) | What::Move(i) = what {
             let n = &project.notes[&ed.part][i];
             out.hit = Some((ed.part.clone(), n.pitch, n.vel, n.len));
             // 選んでいないものを掴んだら、それだけを選び直す。
@@ -949,15 +982,14 @@ fn handle_input(
             if !ed.is_selected(i) {
                 ed.select(vec![i]);
             }
-            ed.grab = if on_edge.is_some() {
-                Grab::Resize { part: ed.part.clone(), index: i }
-            } else {
-                Grab::Move {
+            ed.grab = match what {
+                What::Resize(_) => Grab::Resize { part: ed.part.clone(), index: i },
+                _ => Grab::Move {
                     part: ed.part.clone(),
                     index: i,
-                    offset: step - n.pos as f32,
-                    pitch_off: pitch - n.pitch,
-                }
+                    offset: s_step - n.pos as f32,
+                    pitch_off: s_pitch - n.pitch,
+                },
             };
         } else {
             // 何も無い所から引きずったら、四角で囲んで選ぶ
@@ -1072,12 +1104,21 @@ fn handle_input(
     }
 
     // --- 掴んでいる所の見た目を変える
-    if let Some(ns) = project.notes.get(&ed.part) {
-        // **掴む側と同じ判定を使う。** 別々に書くと、矢印は変わるのに
-        // 引きずると別のことが起きる、という食い違いが起きる
-        if edge_at(ns, pitch, pos.x, v).is_some() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
-        }
+    //
+    // **画面に描いてあるものを見る。** 前は「手で直したぶん」だけを見て
+    // いたので、まだ触っていないパートでは矢印が出なかった。それでいて
+    // 引きずれば伸びる（掴む側は触った時点で写すので）。
+    // 触った瞬間から矢印が出始める、という分かりにくい違いになっていた
+    let shown: &[Note] = project
+        .notes
+        .get(&part_name)
+        .map(|v| v.as_slice())
+        .or_else(|| score.get(&part_name).map(|v| v.as_slice()))
+        .unwrap_or(&[]);
+    match what_at(shown, pitch, pos.x, step, v) {
+        What::Resize(_) => ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal),
+        What::Move(_) => ui.ctx().set_cursor_icon(egui::CursorIcon::Grab),
+        What::Select => {}
     }
     let _ = Vec2::ZERO;
 }
