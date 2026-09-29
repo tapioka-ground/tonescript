@@ -85,8 +85,9 @@ fn everything_round_trips_through_the_file() {
     let d = dir("all");
     let st = Store::new(&d, "example");
     let mut p = Project::new("example");
-    p.add_note("lead", Note { pos: 4, len: 7, pitch: 71, vel: 88, mora: "ら".into() });
-    p.add_note("bass", note(0, 40));
+    // 触り始めた時点の生成も持つ（音符だけあって元が無い状態は作れない）
+    p.take_over("lead", &[Note { pos: 4, len: 7, pitch: 71, vel: 88, mora: "ら".into() }]);
+    p.take_over("bass", &[note(0, 40)]);
     p.automation.insert(
         "lead".into(),
         HashMap::from([

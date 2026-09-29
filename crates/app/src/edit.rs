@@ -893,10 +893,10 @@ fn handle_input(
     // 編集は「今のパート」に対してだけ行う。
     // 曲ファイルが作ったぶんを触るときは、まずそのパートを手元へ写す。
     let ensure = |project: &mut Project, ed: &Editor| {
-        if !project.is_edited(&ed.part) {
-            let from = score.get(&ed.part).cloned().unwrap_or_default();
-            project.notes.insert(ed.part.clone(), from);
-        }
+        // 触り始めた時点の生成を控えておく。あとで曲ファイルが直されたとき、
+        // 「曲ファイルが変えた所」と「人が変えた所」を見分けるのに要る
+        let from = score.get(&ed.part).cloned().unwrap_or_default();
+        project.take_over(&ed.part, &from);
     };
 
     // どの音符の上か。`ed` を借りたままにしないよう、パート名を写して持つ

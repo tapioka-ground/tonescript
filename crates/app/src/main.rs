@@ -1425,6 +1425,26 @@ impl App {
         let Some(song) = self.merged_song() else { return };
         match build(&song) {
             Ok(mut sc) => {
+                // **曲ファイルの直しを、手で触ったパートへも混ぜる。**
+                // これが無いと、音符を1つ触った瞬間にそのパートが曲ファイル
+                // から切り離され、`.rhai` をいくら直しても出てこない
+                // 混ざる前の姿を控える。黙って変わると取り消せない
+                let before = self.project.needs_resync(&sc).then(|| self.project.clone());
+                let synced = self.project.resync(&sc);
+                if !synced.is_empty() {
+                    if let Some(before) = before {
+                        self.history.record(&before, Tag::Once);
+                    }
+                    let mut said: Vec<String> = Vec::new();
+                    for (part, r) in &synced {
+                        said.push(format!(
+                            "{part}（曲{} / 手{} / 消{}）",
+                            r.from_song, r.kept, r.dropped
+                        ));
+                    }
+                    self.status = format!("曲ファイルの直しを混ぜました: {}", said.join("  "));
+                    self.saver.touched();
+                }
                 self.project.overlay(&mut sc);
                 self.score = Some(sc);
                 self.error = None;
@@ -3328,9 +3348,13 @@ impl App {
 
             if self.project.is_edited(&part) {
                 ui.add_space(10.0);
-                if ui.button("このパートを曲ファイルへ戻す").clicked() {
+                if ui
+                    .button("このパートを曲ファイルへ戻す")
+                    .on_hover_text("手で直したぶんを捨てて、曲ファイルの生成に戻します")
+                    .clicked()
+                {
                     self.record(Tag::Once);
-                    self.project.notes.remove(&part);
+                    self.project.give_back(&part);
                     self.touched();
                 }
             }
@@ -3643,6 +3667,84 @@ mod tests {
         app.add_part();
         assert!(app.add_error.is_some(), "同じ名前が通った");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), before, "断ったのに書いた");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **画面で音符を触ったパートにも、曲ファイルの直しが届くこと。**
+    ///
+    /// ここがこの道具の要。音符を1つ触った瞬間にそのパートが曲ファイルから
+    /// 切り離されると、「画面を開いたまま AI に `.rhai` を直してもらう」が
+    /// そこで止まる。実際そうなっていた
+    #[test]
+    fn editing_a_part_does_not_cut_it_off_from_the_song_file() {
+        let _one = solo();
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("tonescript_merge_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("merged.rhai");
+        let src = |mel: &str| {
+            format!(
+                r#"let TITLE = "試し";
+                   let BPM = 120;
+                   let SECTIONS = [["A", 2, "p", "k", "m", 1.0]];
+                   let VOICES = #{{ lead: #{{ ch: 0, patch: "piano" }} }};
+                   let BASS_PATTERNS = #{{ p: [[0, 4, 0]] }};
+                   let MELODY = #{{ "1": bar([{mel}]), "2": bar([[16, "C4"]]) }};
+                   let ARRANGE = #{{ "1": ["lead"], "2": ["lead"] }};
+                "#
+            )
+        };
+        std::fs::write(&path, src(r#"[8, "A4"], [8, "B4"]"#)).unwrap();
+        std::env::set_var("TONESCRIPT_SONGS", &dir);
+        let mut tmp = std::env::temp_dir();
+        tmp.push(format!("tonescript_merge_out_{}", std::process::id()));
+        std::env::set_var("TONESCRIPT_ROOT", &tmp);
+
+        let mut app = App::default();
+        app.open_song("merged");
+        app.ed.part = "lead".into();
+        let gen = app.score.as_ref().unwrap()["lead"].clone();
+        assert_eq!(gen.len(), 3, "下ごしらえが違う");
+
+        // 画面で触る。ここで前はパートが切り離されていた
+        app.project.take_over("lead", &gen);
+        app.project.add_note(
+            "lead",
+            tonescript_song::model::Note {
+                pos: 24,
+                len: 4,
+                pitch: 76,
+                vel: 100,
+                mora: String::new(),
+            },
+        );
+        app.rebuild();
+        assert!(
+            app.score.as_ref().unwrap()["lead"].iter().any(|n| n.pos == 24),
+            "足した音が譜面に出ていない"
+        );
+
+        // AI が `.rhai` の旋律を直した（A4 B4 -> E5 一本）
+        std::fs::write(&path, src(r#"[16, "E5"]"#)).unwrap();
+        app.reload_song();
+
+        let now = app.score.as_ref().expect("読み直せている")["lead"].clone();
+        let pitches: Vec<i32> = now.iter().map(|n| n.pitch).collect();
+        // **曲ファイルの直しが届いていること**
+        assert!(pitches.contains(&76), "手で足した音が消えた: {pitches:?}");
+        assert!(
+            pitches.contains(&tonescript_song::model::note_number("E5").unwrap()),
+            "曲ファイルの直しが届いていない: {pitches:?}"
+        );
+        assert!(
+            !pitches.contains(&tonescript_song::model::note_number("B4").unwrap()),
+            "古い音が残っている: {pitches:?}"
+        );
+
+        // 混ぜたぶんは取り消せること
+        assert!(app.history.undo(&mut app.project), "取り消せない");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -175,13 +175,10 @@ fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
 
 // ---------------------------------------------------------------- 変換
 
-fn encode(p: &Project) -> Value {
-    let mut root = Value::obj();
-    root.insert("format", FORMAT.into());
-    root.insert("song", p.song.as_str().into());
-
-    let mut notes = Value::obj();
-    for (part, ns) in &p.notes {
+/// パート -> 音符 を JSON へ。
+fn notes_value(map: &std::collections::HashMap<String, Vec<Note>>) -> Value {
+    let mut out = Value::obj();
+    for (part, ns) in map {
         let arr: Vec<Value> = ns
             .iter()
             .map(|n| {
@@ -196,9 +193,45 @@ fn encode(p: &Project) -> Value {
                 o
             })
             .collect();
-        notes.insert(part, Value::Arr(arr));
+        out.insert(part, Value::Arr(arr));
     }
-    root.insert("notes", notes);
+    out
+}
+
+/// JSON からパート -> 音符へ。読めない音符があれば理由を返す。
+fn read_notes(v: &Value, what: &str) -> Result<std::collections::HashMap<String, Vec<Note>>, String> {
+    let mut out = std::collections::HashMap::new();
+    let Some(m) = v.as_obj() else { return Ok(out) };
+    for (part, arr) in m {
+        let mut ns = Vec::new();
+        for it in arr.as_arr().unwrap_or(&[]) {
+            let pos = it.get("pos").and_then(|x| x.as_u32());
+            let pitch = it.get("pitch").and_then(|x| x.as_i32());
+            let (Some(pos), Some(pitch)) = (pos, pitch) else {
+                return Err(format!("{what} {part}: 音符に pos か pitch がありません"));
+            };
+            ns.push(Note {
+                pos,
+                len: it.get("len").and_then(|x| x.as_u32()).unwrap_or(1).max(1),
+                pitch: pitch.clamp(0, 127),
+                vel: it.get("vel").and_then(|x| x.as_u32()).unwrap_or(100).clamp(1, 127) as u8,
+                mora: it.get("mora").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+            });
+        }
+        ns.sort_by_key(|n| (n.pos, n.pitch));
+        out.insert(part.clone(), ns);
+    }
+    Ok(out)
+}
+
+fn encode(p: &Project) -> Value {
+    let mut root = Value::obj();
+    root.insert("format", FORMAT.into());
+    root.insert("song", p.song.as_str().into());
+
+    root.insert("notes", notes_value(&p.notes));
+    // 触り始めた時点の生成。曲ファイルの直しを混ぜるのに要る
+    root.insert("base", notes_value(&p.base));
 
     let mut auto = Value::obj();
     for (part, lanes) in &p.automation {
@@ -352,25 +385,18 @@ fn decode(v: &Value) -> Result<Project, String> {
         ..Default::default()
     };
 
-    if let Some(m) = v.get("notes").and_then(|x| x.as_obj()) {
-        for (part, arr) in m {
-            let mut ns = Vec::new();
-            for it in arr.as_arr().unwrap_or(&[]) {
-                let pos = it.get("pos").and_then(|x| x.as_u32());
-                let pitch = it.get("pitch").and_then(|x| x.as_i32());
-                let (Some(pos), Some(pitch)) = (pos, pitch) else {
-                    return Err(format!("{part}: 音符に pos か pitch がありません"));
-                };
-                ns.push(Note {
-                    pos,
-                    len: it.get("len").and_then(|x| x.as_u32()).unwrap_or(1).max(1),
-                    pitch: pitch.clamp(0, 127),
-                    vel: it.get("vel").and_then(|x| x.as_u32()).unwrap_or(100).clamp(1, 127) as u8,
-                    mora: it.get("mora").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                });
-            }
-            ns.sort_by_key(|n| (n.pos, n.pitch));
-            p.notes.insert(part.clone(), ns);
+    if let Some(m) = v.get("notes") {
+        p.notes = read_notes(m, "音符")?;
+    }
+    if let Some(m) = v.get("base") {
+        p.base = read_notes(m, "元の音符")?;
+    }
+    // 古い保存には元が入っていない。そのままだと曲ファイルの直しが
+    // 届かないので、**今の手編集をそのまま元とみなす。**
+    // 次に曲ファイルが直されたときから混ざるようになる
+    for part in p.notes.keys() {
+        if !p.base.contains_key(part) {
+            p.base.insert(part.clone(), p.notes[part].clone());
         }
     }
 
@@ -589,8 +615,8 @@ mod tests {
 
     fn sample() -> Project {
         let mut p = Project::new("example");
-        p.add_note("lead", note(0, 60));
-        p.add_note("lead", note(8, 64));
+        // 触り始めた時点の生成も持つ（音符だけあって元が無い状態は作れない）
+        p.take_over("lead", &[note(0, 60), note(8, 64)]);
         p.automation.insert(
             "lead".into(),
             HashMap::from([(Lane::Gain, Curve::new(vec![(0, 1.0), (32, 0.25)]))]),

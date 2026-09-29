@@ -41,6 +41,12 @@ pub struct Project {
     pub song: String,
     /// パート -> 手で置いた音符。ここにあるパートは曲ファイルの生成を使わない
     pub notes: HashMap<String, Vec<Note>>,
+    /// パート -> **触り始めた時点で曲ファイルが作っていた音符。**
+    ///
+    /// 手で直したぶんと曲ファイルの直しを混ぜるのに要る。
+    /// 「元はこうだった」が分からないと、どちらが直したのか決められない
+    /// （[`Project::resync`] を見よ）
+    pub base: HashMap<String, Vec<Note>>,
     /// パート -> 線
     pub automation: HashMap<String, HashMap<Lane, Curve>>,
     /// パート -> 音量の倍率（線ではなく1つの値）
@@ -61,6 +67,71 @@ pub struct Project {
     pub muted: Vec<String>,
     /// これだけ鳴らすパート。空なら全部鳴らす
     pub soloed: Vec<String>,
+}
+
+/// 混ぜた結果の内訳。何が起きたかを人に言うため。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Sync {
+    /// 曲ファイルの今の形をそのまま採った数
+    pub from_song: usize,
+    /// 人が足した・直したので残した数
+    pub kept: usize,
+    /// 人が消したので、曲ファイルにあっても入れなかった数
+    pub dropped: usize,
+}
+
+/// 音符を見分ける鍵。同じ所の同じ高さなら同じ音符とみなす。
+fn key(n: &Note) -> (u32, i32) {
+    (n.pos, n.pitch)
+}
+
+/// 3方向マージ。[`Project::resync`] の中身。
+fn merge(base: &[Note], user: &[Note], gen: &[Note]) -> (Vec<Note>, Sync) {
+    use std::collections::HashSet;
+    let base_keys: HashSet<(u32, i32)> = base.iter().map(key).collect();
+    let user_keys: HashSet<(u32, i32)> = user.iter().map(key).collect();
+
+    // 人が消したもの（元にはあって、今は無い）
+    let dropped: HashSet<(u32, i32)> = base_keys.difference(&user_keys).copied().collect();
+    // 人が足したもの（元に無くて、今はある）
+    let added: Vec<Note> =
+        user.iter().filter(|n| !base_keys.contains(&key(n))).cloned().collect();
+    // 人が直したもの（両方にあって、中身が違う）
+    let changed: Vec<Note> = user
+        .iter()
+        .filter(|n| {
+            base.iter().any(|b| key(b) == key(n) && b != *n)
+        })
+        .cloned()
+        .collect();
+
+    let mut report = Sync::default();
+    let mut out: Vec<Note> = Vec::with_capacity(gen.len() + added.len());
+    for n in gen {
+        if dropped.contains(&key(n)) {
+            report.dropped += 1;
+            continue;
+        }
+        match changed.iter().find(|c| key(c) == key(n)) {
+            Some(c) => {
+                out.push(c.clone());
+                report.kept += 1;
+            }
+            None => {
+                out.push(n.clone());
+                report.from_song += 1;
+            }
+        }
+    }
+    // 人が足したぶん。曲ファイル側に同じ所があれば、そちらは上で入っている
+    for n in added {
+        if !out.iter().any(|o| key(o) == key(&n)) {
+            out.push(n);
+            report.kept += 1;
+        }
+    }
+    out.sort_by_key(|n| (n.pos, n.pitch));
+    (out, report)
 }
 
 impl Project {
@@ -106,6 +177,66 @@ impl Project {
     /// 手で置いた音符があるパートか。
     pub fn is_edited(&self, part: &str) -> bool {
         self.notes.contains_key(part)
+    }
+
+    /// そのパートを手元へ写す。**触り始めるときに1回だけ呼ぶ。**
+    ///
+    /// 写した中身を `base` にも覚えておく。あとで曲ファイルが直されたとき、
+    /// 「曲ファイルが変えた所」と「人が変えた所」を見分けるのに要る
+    pub fn take_over(&mut self, part: &str, generated: &[Note]) {
+        self.notes.entry(part.to_string()).or_insert_with(|| generated.to_vec());
+        self.base.entry(part.to_string()).or_insert_with(|| generated.to_vec());
+    }
+
+    /// 手編集をやめて、曲ファイルの生成へ戻す。
+    pub fn give_back(&mut self, part: &str) {
+        self.notes.remove(part);
+        self.base.remove(part);
+    }
+
+    /// 混ぜるものがあるか。無ければ何もしなくていい。
+    ///
+    /// 譜面を組み直すたびに呼ばれるので、先に安く判る道を用意しておく
+    pub fn needs_resync(&self, generated: &HashMap<String, Vec<Note>>) -> bool {
+        self.base.iter().any(|(part, base)| {
+            generated.get(part).is_some_and(|gen| gen != base) && self.notes.contains_key(part)
+        })
+    }
+
+    /// 曲ファイルが直されたぶんを、手編集へ**混ぜる**。
+    ///
+    /// これが無いと、音符を1つ触っただけでそのパートが曲ファイルから
+    /// 切り離され、以後 `.rhai` をいくら直しても画面に出てこない。
+    /// 「画面を開いたまま AI と直していく」がそこで止まる。
+    ///
+    /// やり方は版管理の3方向マージと同じ。
+    ///
+    /// - `base`（触り始めた時点の生成） … 元
+    /// - `notes`（今の手編集） … 人が直したもの
+    /// - `generated`（今の曲ファイルの生成） … 曲ファイルが直したもの
+    ///
+    /// 音符は `(位置, 音程)` で同じものとみなす。
+    ///
+    /// - 人が消したものは、曲ファイル側にあっても消えたまま
+    /// - 人が足したものは残る
+    /// - 人が長さや強さを変えたものは、人の値が勝つ
+    /// - **人が触っていないものは、曲ファイルの今の形になる** ← これが要点
+    ///
+    /// 返すのは、混ぜたパートと `(曲ファイルから来た数, 人のぶん, 消したぶん)`。
+    pub fn resync(&mut self, generated: &HashMap<String, Vec<Note>>) -> Vec<(String, Sync)> {
+        let mut out = Vec::new();
+        for (part, base) in self.base.clone() {
+            let Some(gen) = generated.get(&part) else { continue };
+            if *gen == base {
+                continue; // 曲ファイル側は変わっていない
+            }
+            let Some(user) = self.notes.get(&part).cloned() else { continue };
+            let (merged, report) = merge(&base, &user, gen);
+            self.notes.insert(part.clone(), merged);
+            self.base.insert(part.clone(), gen.clone());
+            out.push((part, report));
+        }
+        out
     }
 
     /// 音符を1つ置く。位置の順に入れる。
@@ -249,6 +380,106 @@ mod tests {
         p.set_plays(2, "lead", false, &now);
         assert!(p.arrange.contains_key(&2), "空にした覚えが残っていない");
         assert!(!p.plays(2, "lead", true), "曲ファイル側が勝ってしまった");
+    }
+
+    fn n(pos: u32, pitch: i32, len: u32) -> Note {
+        Note { pos, len, pitch, vel: 100, mora: String::new() }
+    }
+
+    /// **曲ファイルの直しが、手で触ったパートにも届くこと。**
+    ///
+    /// ここが効かないと、音符を1つ触った瞬間にそのパートが曲ファイルから
+    /// 切り離され、`.rhai` をいくら直しても画面に出てこない。
+    /// 「画面を開いたまま AI と直していく」がそこで止まる
+    #[test]
+    fn the_song_file_still_reaches_a_part_you_have_edited() {
+        let mut p = Project::new("x");
+        // 曲ファイルが3音作っていた。そこを触り始める
+        let gen = vec![n(0, 60, 4), n(4, 62, 4), n(8, 64, 4)];
+        p.take_over("arp", &gen);
+        // 人が1音足して、1音消して、1音の長さを変えた
+        p.notes.insert(
+            "arp".into(),
+            vec![n(0, 60, 8), n(8, 64, 4), n(12, 67, 4)],
+        );
+
+        // 曲ファイル側が変わった（和音が変わって音程が上がった）
+        let mut now = HashMap::new();
+        now.insert("arp".to_string(), vec![n(0, 65, 4), n(4, 67, 4), n(8, 69, 4)]);
+        let report = p.resync(&now);
+
+        assert_eq!(report.len(), 1, "混ぜられていない");
+        let got = &p.notes["arp"];
+        let pitches: Vec<i32> = got.iter().map(|x| x.pitch).collect();
+        // 曲ファイルの新しい音程が入っていること
+        assert!(pitches.contains(&65), "曲ファイルの直しが届いていない: {pitches:?}");
+        assert!(pitches.contains(&67));
+        assert!(pitches.contains(&69));
+        // 人が足した音は残ること
+        assert!(got.iter().any(|x| x.pos == 12 && x.pitch == 67), "足した音が消えた");
+        // 人が消した音（位置4・音程62）は、曲ファイルが作り直しても戻らないこと…
+        // ただし今回は曲ファイル側の位置4が別の音程(67)になっているので、
+        // 「消した音」とは別物として入る。ここは位置と音程で見ている結果
+        assert_eq!(p.base["arp"], now["arp"], "元を覚え直していない");
+    }
+
+    #[test]
+    fn what_the_person_changed_wins() {
+        let mut p = Project::new("x");
+        let gen = vec![n(0, 60, 4), n(4, 62, 4)];
+        p.take_over("lead", &gen);
+        // 長さだけ変えた
+        p.notes.insert("lead".into(), vec![n(0, 60, 16), n(4, 62, 4)]);
+
+        // 曲ファイル側も同じ音符の長さを変えてきた
+        let mut now = HashMap::new();
+        now.insert("lead".to_string(), vec![n(0, 60, 2), n(4, 62, 4), n(8, 64, 4)]);
+        p.resync(&now);
+
+        let got = &p.notes["lead"];
+        let first = got.iter().find(|x| x.pos == 0).unwrap();
+        assert_eq!(first.len, 16, "人が変えた長さが曲ファイルに負けた");
+        // 曲ファイルが足した音符は入ること
+        assert!(got.iter().any(|x| x.pos == 8), "曲ファイルが足した音が来ていない");
+    }
+
+    #[test]
+    fn a_note_the_person_deleted_stays_deleted() {
+        let mut p = Project::new("x");
+        let gen = vec![n(0, 60, 4), n(4, 62, 4)];
+        p.take_over("lead", &gen);
+        p.notes.insert("lead".into(), vec![n(0, 60, 4)]); // 62 を消した
+
+        // 曲ファイルは変わったが、消した音はそのまま作り続けている
+        let mut now = HashMap::new();
+        now.insert("lead".to_string(), vec![n(0, 60, 4), n(4, 62, 4), n(8, 64, 4)]);
+        let report = p.resync(&now);
+
+        let got = &p.notes["lead"];
+        assert!(!got.iter().any(|x| x.pos == 4 && x.pitch == 62), "消した音が戻った");
+        assert!(got.iter().any(|x| x.pos == 8), "曲ファイルが足した音が来ていない");
+        assert_eq!(report[0].1.dropped, 1);
+    }
+
+    #[test]
+    fn nothing_happens_when_the_song_file_did_not_change() {
+        let mut p = Project::new("x");
+        let gen = vec![n(0, 60, 4)];
+        p.take_over("lead", &gen);
+        p.notes.insert("lead".into(), vec![n(0, 60, 4), n(4, 62, 4)]);
+        let mut now = HashMap::new();
+        now.insert("lead".to_string(), gen.clone());
+        assert!(p.resync(&now).is_empty(), "変わっていないのに混ぜた");
+        assert_eq!(p.notes["lead"].len(), 2, "手編集が触られた");
+    }
+
+    #[test]
+    fn giving_a_part_back_forgets_the_snapshot_too() {
+        let mut p = Project::new("x");
+        p.take_over("lead", &[n(0, 60, 4)]);
+        p.give_back("lead");
+        assert!(!p.notes.contains_key("lead"));
+        assert!(!p.base.contains_key("lead"), "元だけ残ると、次に触ったとき古い元で混ざる");
     }
 
     #[test]
