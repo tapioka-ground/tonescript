@@ -113,6 +113,12 @@ pub fn ring_of(song: &Song, name: &str) -> f32 {
 }
 
 /// パートごとに音を作る。ノートは並列に回す。
+/// 一度に作っておく音の本数。
+///
+/// 増やすほど並列に回るが、そのぶん同時に持つ覚えが増える。
+/// 16コアを埋めるには数十本あれば足りる
+const NOTES_AT_ONCE: usize = 48;
+
 pub fn render_stems(song: &Song, score: &Score, progress: Progress) -> Stems {
     let times = arrange::step_times(song);
     let total = ((times.last().copied().unwrap_or(0.0) + 4.0) * SR as f64) as usize;
@@ -135,23 +141,35 @@ pub fn render_stems(song: &Song, score: &Score, progress: Progress) -> Stems {
             } else {
                 arrange::patch_for(song, part, 1).map(|p| ring_of(song, &p)).unwrap_or(0.0)
             };
-            // ノートを並列に作ってから、1本の帯へ足し込む
-            let rendered: Vec<(usize, Vec<f32>)> = notes
-                .par_iter()
-                .filter_map(|nt| {
-                    let s = at(nt.pos);
-                    let e = at(nt.pos + nt.len.max(1));
-                    render_note(song, &cfg, part, nt, s, e.max(s + 1), ring)
-                })
-                .collect();
+            // ノートを並列に作って、1本の帯へ足し込む。
+            //
+            // **全部を一度に持たない。** 1音ずつ別の入れ物に作るので、
+            // まとめて持つと「曲の長さ × 音の数」ぶんの覚えが要る。
+            // 54秒3パートの曲で 650MB まで膨れた（パートも並列なので
+            // その分だけ掛かる）。数十本ずつ作って足し込めば、一度に
+            // 持つのはその数十本ぶんで済む。
+            //
+            // 足し込む順は前と同じなので、出てくる音は1ビットも変わらない
+            //（`chunks` は並びを保つ。浮動小数の足し算は順で結果が変わる
+            // ので、ここは変えてはいけない）
             let mut buf = vec![0.0f32; total];
-            for (start, wave) in rendered {
-                for (i, v) in wave.iter().enumerate() {
-                    let j = start + i;
-                    if j >= total {
-                        break;
+            for chunk in notes.chunks(NOTES_AT_ONCE) {
+                let rendered: Vec<(usize, Vec<f32>)> = chunk
+                    .par_iter()
+                    .filter_map(|nt| {
+                        let s = at(nt.pos);
+                        let e = at(nt.pos + nt.len.max(1));
+                        render_note(song, &cfg, part, nt, s, e.max(s + 1), ring)
+                    })
+                    .collect();
+                for (start, wave) in rendered {
+                    for (i, v) in wave.iter().enumerate() {
+                        let j = start + i;
+                        if j >= total {
+                            break;
+                        }
+                        buf[j] += v;
                     }
-                    buf[j] += v;
                 }
             }
             progress(&format!("  合成 {:<8} {:>5} ノート", part, notes.len()));

@@ -3677,6 +3677,57 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// 覚えが増え続けないかを見るための道具。ふだんは走らせない。
+    ///
+    /// `cargo test -p tonescript-app stress -- --ignored --nocapture`
+    /// 走らせている間、外から `Get-Process` で見張る。
+    ///
+    /// 画面は開かないが、音符を触ったときに通る道は同じ
+    /// （組み直し → 混ぜる → 鳴らす側へ渡す → 裏で音圧を測る）
+    #[test]
+    #[ignore = "覚えの増え方を手で見るための道具"]
+    fn stress_edits() {
+        let _one = solo();
+        use_repo_songs();
+        let mut app = App::default();
+        let Some(first) = app.entries.first().map(|e| e.name.clone()) else { return };
+        app.open_song(&first);
+        let part = app.ed.part.clone();
+        eprintln!("[負荷] {first} / パート {part} を行き来させる");
+
+        // **音符の数は増やさない。** 1本を行き来させるだけ。
+        // 増やすと「増えたぶんの覚え」と「漏れ」の区別が付かなくなる
+        app.project.add_note(
+            &part,
+            tonescript_song::model::Note {
+                pos: 0,
+                len: 4,
+                pitch: 72,
+                vel: 100,
+                mora: String::new(),
+            },
+        );
+        let rounds: u32 =
+            std::env::var("STRESS").ok().and_then(|s| s.parse().ok()).unwrap_or(6000);
+        for i in 0..rounds {
+            let from = (i % 32) * 4;
+            let to = ((i + 1) % 32) * 4;
+            app.record(Tag::Move(part.clone(), 0));
+            if let Some(mut n) = app.project.remove_note(&part, from, 72) {
+                n.pos = to;
+                app.project.add_note(&part, n);
+            }
+            app.touched();
+            if i % 500 == 0 {
+                let n = app.project.notes.get(&part).map(|v| v.len()).unwrap_or(0);
+                eprintln!("[負荷] {i:>5} 回  音符 {n:>5}  戻せる {}", app.history.depth_used().0);
+                std::thread::sleep(std::time::Duration::from_millis(700));
+            }
+        }
+        eprintln!("[負荷] おわり");
+        std::thread::sleep(std::time::Duration::from_secs(3));
+    }
+
     /// **画面で音符を触ったパートにも、曲ファイルの直しが届くこと。**
     ///
     /// ここがこの道具の要。音符を1つ触った瞬間にそのパートが曲ファイルから

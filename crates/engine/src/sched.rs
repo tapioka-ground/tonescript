@@ -579,20 +579,53 @@ pub(crate) fn spawn(
                 measure_at: None,
                 back,
             };
-            loop {
-                match rx.recv_timeout(Duration::from_millis(4)) {
-                    Ok(Cmd::Quit) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-                    Ok(Cmd::Song(song, score)) => s.set_song(song, score),
-                    Ok(Cmd::Plan(p)) => {
+            /// 頼みを1つ片付ける。`false` なら終わり。
+            fn handle(s: &mut Sched, cmd: Cmd) -> bool {
+                match cmd {
+                    Cmd::Quit => return false,
+                    Cmd::Song(song, score) => s.set_song(song, score),
+                    Cmd::Plan(p) => {
                         s.plan = p.clone();
                         s.send(Msg::Plan(p));
                     }
-                    Ok(Cmd::Live { part, pitch, vel, secs }) => s.live(&part, pitch, vel, secs),
-                    Ok(Cmd::Off { part, pitch }) => s.lift(&part, pitch),
-                    Ok(Cmd::Press { part, pitch, vel }) => s.press(&part, pitch, vel),
-                    Ok(Cmd::Audio(a)) => s.send(Msg::Audio(a)),
-                    Ok(Cmd::CountIn(beats)) => s.count_in(beats),
-                    Ok(Cmd::Measured { makeup, trim }) => s.measured(makeup, trim),
+                    Cmd::Live { part, pitch, vel, secs } => s.live(&part, pitch, vel, secs),
+                    Cmd::Off { part, pitch } => s.lift(&part, pitch),
+                    Cmd::Press { part, pitch, vel } => s.press(&part, pitch, vel),
+                    Cmd::Audio(a) => s.send(Msg::Audio(a)),
+                    Cmd::CountIn(beats) => s.count_in(beats),
+                    Cmd::Measured { makeup, trim } => s.measured(makeup, trim),
+                }
+                true
+            }
+
+            loop {
+                match rx.recv_timeout(Duration::from_millis(4)) {
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                    Ok(cmd) => {
+                        if !handle(&mut s, cmd) {
+                            break;
+                        }
+                        // **溜まっているぶんは全部片付ける。**
+                        //
+                        // 1回に1つだけ片付けると、画面から続けて届いたとき
+                        // （音符を引きずっている間など）に行列が伸びる。
+                        // `Cmd::Song` は曲と譜面の写しを丸ごと抱えているので、
+                        // 伸びたぶんだけ覚えを持っていかれる。実測で、音符1つ
+                        // しか無い曲でも 1GB まで伸びた。
+                        //
+                        // 片付けるのは安い（後から来たほうで上書きされる）ので、
+                        // ここで全部飲む
+                        let mut quit = false;
+                        while let Ok(cmd) = rx.try_recv() {
+                            if !handle(&mut s, cmd) {
+                                quit = true;
+                                break;
+                            }
+                        }
+                        if quit {
+                            break;
+                        }
+                    }
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 }
                 s.collect();
