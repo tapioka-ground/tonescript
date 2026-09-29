@@ -3647,6 +3647,83 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// **見張りが本当に火を噴くこと。**
+    ///
+    /// 読み直す道（[`App::reload_song`]）が正しくても、見張りが呼ばな
+    /// ければ意味がない。画面を開かずに、見張りだけを回して確かめる。
+    ///
+    /// 拍子と小節数が変わる場合を見る。これがいちばん食い違いが目に付く
+    /// （古い4拍子の音符が3拍子の小節に入りきらず、後ろがはみ出す）
+    #[test]
+    fn the_watcher_picks_up_a_meter_change_by_itself() {
+        let _one = solo();
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("tonescript_meter_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("watched.rhai");
+        let four = r#"let TITLE = "試し";
+            let BPM = 120;
+            let SECTIONS = [["A", 8, "p", "k", "m", 1.0]];
+            let VOICES = #{ lead: #{ ch: 0, patch: "piano" } };
+            let CHORDS = #{ "1": ["Am", ["A3", "C4", "E4"], "A2"] };
+            let MELODY = #{ "1": bar([[16, "A4"]]) };
+            let ARRANGE = #{ "1": ["lead"] };
+        "#;
+        std::fs::write(&path, four).unwrap();
+        std::env::set_var("TONESCRIPT_SONGS", &dir);
+        let mut tmp = std::env::temp_dir();
+        tmp.push(format!("tonescript_meter_out_{}", std::process::id()));
+        std::env::set_var("TONESCRIPT_ROOT", &tmp);
+
+        let mut app = App::default();
+        app.open_song("watched");
+        let song = app.song.as_ref().expect("開けている");
+        assert_eq!(song.bars(), 8);
+        assert_eq!(song.meter_at(1), tonescript_song::model::Meter::new(4, 4));
+        let steps_before = song.total_steps();
+
+        // 外で 3拍子・19小節へ書き換える（1小節 12目盛り）
+        let three = four
+            .replace(r#"["A", 8, "p", "k", "m", 1.0]"#, r#"["A", 19, "p", "k", "m", 1.0, [3, 4]]"#)
+            .replace(r#""1": bar([[16, "A4"]])"#, r#""1": bar([[12, "A4"]])"#);
+        assert_ne!(three, four, "書き換えられていない");
+        std::fs::write(&path, &three).unwrap();
+
+        // 見張りを回す。**1回目では読まない**（書いている途中を掴まないため）
+        let ctx = egui::Context::default();
+        app.watch_song(&ctx);
+        assert_eq!(app.song.as_ref().unwrap().bars(), 8, "1回目で読んでしまった");
+
+        // 間を置いて2回目。ここで読む
+        std::thread::sleep(std::time::Duration::from_millis(450));
+        app.watch_song(&ctx);
+        let song = app.song.as_ref().expect("読み直せている");
+        assert_eq!(song.bars(), 19, "小節数が付いてこない");
+        assert_eq!(song.meter_at(1), tonescript_song::model::Meter::new(3, 4), "拍子が古いまま");
+        assert_ne!(song.total_steps(), steps_before, "曲の長さが変わっていない");
+        // 譜面も組み直されていること（ここが古いと画面の音符がはみ出す）
+        let end = song.total_steps();
+        let score = app.score.as_ref().expect("譜面がある");
+        for (part, ns) in score {
+            for n in ns {
+                assert!(n.pos < end, "{part} の音符が曲の外（{} >= {end}）", n.pos);
+            }
+        }
+
+        // 切っていれば読まないこと
+        app.watch_on = false;
+        let four_again = three.replace("let BPM = 120;", "let BPM = 90;");
+        std::fs::write(&path, &four_again).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(450));
+        app.watch_song(&ctx);
+        app.watch_at = None;
+        app.watch_song(&ctx);
+        assert_eq!(app.song.as_ref().unwrap().bpm, 120.0, "切ってあるのに読んだ");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// 外で直された曲ファイルが、**開き直さずに出てくること。**
     ///
     /// AI やエディタに書かせるのがこの道具の使い方なので、そのたびに
