@@ -802,7 +802,29 @@ fn steps_to_secs(steps: f32, c: &Clip) -> f32 {
 pub const VEL_H: f32 = 84.0;
 
 /// 音符の右端をつかむ幅（ピクセル）。
-const EDGE: f32 = 5.0;
+const EDGE: f32 = 7.0;
+
+/// 右端を掴んだ音符。
+///
+/// **中に居るかどうかより先に、これを見る。**
+///
+/// 右端は音符の「外」にある（位置 `pos + len` は次の音符が始まる所）。
+/// 中に居ることを条件にすると、帯の外半分では長さ変更にならず、
+/// 何も無い所を引きずったことになって**四角で囲む動きに化ける**。
+/// 矢印は「伸ばせます」の形のままなので、効かない理由が分からない。
+///
+/// 帯は音符の幅の 4割までにする。短い音符で帯が全体を覆うと、
+/// 今度は動かせなくなる
+fn edge_at(ns: &[Note], pitch: i32, x: f32, v: &View) -> Option<usize> {
+    ns.iter().position(|n| {
+        if n.pitch != pitch {
+            return false;
+        }
+        let len = n.len.max(1);
+        let band = EDGE.min(len as f32 * v.zoom * 0.4);
+        (v.x_of((n.pos + len) as f32) - x).abs() <= band
+    })
+}
 
 /// 上に置く物差しの高さ。ここを触ると再生ヘッドが動く。
 ///
@@ -865,16 +887,18 @@ fn handle_input(
     // --- 掴む
     if resp.drag_started() {
         ensure(project, ed);
-        if let Some(i) = hit(project) {
+        // 右端が先。中に居るかどうかはそのあと
+        let ns = project.notes.get(&ed.part).cloned().unwrap_or_default();
+        let on_edge = edge_at(&ns, pitch, pos.x, v);
+        if let Some(i) = on_edge.or_else(|| hit(project)) {
             let n = &project.notes[&ed.part][i];
-            let right = v.x_of((n.pos + n.len.max(1)) as f32);
             out.hit = Some((ed.part.clone(), n.pitch, n.vel, n.len));
             // 選んでいないものを掴んだら、それだけを選び直す。
             // 選んでいるものを掴んだら、選んだまま（まとめて動かすため）
             if !ed.is_selected(i) {
                 ed.select(vec![i]);
             }
-            ed.grab = if (right - pos.x).abs() <= EDGE {
+            ed.grab = if on_edge.is_some() {
                 Grab::Resize { part: ed.part.clone(), index: i }
             } else {
                 Grab::Move { part: ed.part.clone(), index: i, offset: step - n.pos as f32 }
@@ -991,10 +1015,9 @@ fn handle_input(
 
     // --- 掴んでいる所の見た目を変える
     if let Some(ns) = project.notes.get(&ed.part) {
-        let on_edge = ns.iter().any(|n| {
-            n.pitch == pitch && (v.x_of((n.pos + n.len.max(1)) as f32) - pos.x).abs() <= EDGE
-        });
-        if on_edge {
+        // **掴む側と同じ判定を使う。** 別々に書くと、矢印は変わるのに
+        // 引きずると別のことが起きる、という食い違いが起きる
+        if edge_at(ns, pitch, pos.x, v).is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
         }
     }
@@ -1013,6 +1036,64 @@ mod tests {
             row_h: 10.0,
             rect: Rect::from_min_size(Pos2::new(100.0, 50.0), Vec2::new(800.0, 400.0)),
         }
+    }
+
+    fn note(pos: u32, len: u32, pitch: i32) -> Note {
+        Note { pos, len, pitch, vel: 100, mora: String::new() }
+    }
+
+    /// **右端の帯が、音符の外側でも効くこと。**
+    ///
+    /// ここが「音符の中に居ること」を条件にしていたので、帯の外半分では
+    /// 長さ変更にならず、四角で囲む動きに化けていた。矢印は「伸ばせます」の
+    /// 形のままなので、効かない理由が画面から分からない
+    #[test]
+    fn the_right_edge_can_be_grabbed_from_either_side() {
+        let v = view();
+        let ns = vec![note(0, 4, 60)];
+        // 音符は 0〜4 目盛り = 画面の 100〜140px
+        let right = v.x_of(4.0);
+        assert_eq!(right, 140.0);
+        // 内側から
+        assert_eq!(edge_at(&ns, 60, right - 3.0, &v), Some(0), "内側で掴めない");
+        // **外側から。** ここが効いていなかった
+        assert_eq!(edge_at(&ns, 60, right + 3.0, &v), Some(0), "外側で掴めない");
+        // ちょうど端
+        assert_eq!(edge_at(&ns, 60, right, &v), Some(0));
+        // 遠い所は掴まない
+        assert_eq!(edge_at(&ns, 60, right + 20.0, &v), None, "遠すぎるのに掴んだ");
+        assert_eq!(edge_at(&ns, 60, v.x_of(1.0), &v), None, "真ん中で掴んだ");
+        // 音程が違えば掴まない
+        assert_eq!(edge_at(&ns, 61, right, &v), None, "隣の段で掴んだ");
+    }
+
+    /// 短い音符で、帯が音符を覆い尽くさないこと。
+    ///
+    /// 覆うと、今度は**動かせなくなる**。長さを変えるほうだけが効いて、
+    /// 掴んで動かせない音符ができる
+    #[test]
+    fn a_short_note_can_still_be_grabbed_in_the_middle() {
+        let v = view();
+        // 1目盛り = 10px の音符。帯は 7px ではなく 4px までに縮む
+        let ns = vec![note(2, 1, 60)];
+        let right = v.x_of(3.0);
+        assert_eq!(edge_at(&ns, 60, right, &v), Some(0), "端で掴めない");
+        // 音符の頭のあたりは「端」ではないこと
+        let head = v.x_of(2.0) + 1.0;
+        assert_eq!(edge_at(&ns, 60, head, &v), None, "頭まで端になっている");
+    }
+
+    /// 拡大率を下げても、端が隣の音符へはみ出さないこと。
+    #[test]
+    fn the_band_shrinks_with_the_zoom() {
+        let mut v = view();
+        v.zoom = 2.0; // 1目盛り 2px。16分が線のような細さ
+        let ns = vec![note(0, 1, 60), note(1, 1, 60)];
+        // 1つ目の右端 = 2つ目の左端。ここは1つ目の端として掴めること
+        let x = v.x_of(1.0);
+        assert_eq!(edge_at(&ns, 60, x, &v), Some(0));
+        // 2つ目の右端も、それとして掴めること（帯が重なって1つ目に吸われない）
+        assert_eq!(edge_at(&ns, 60, v.x_of(2.0), &v), Some(1), "隣に吸われた");
     }
 
     #[test]
