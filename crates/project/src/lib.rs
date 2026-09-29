@@ -78,6 +78,13 @@ pub struct Sync {
     pub kept: usize,
     /// 人が消したので、曲ファイルにあっても入れなかった数
     pub dropped: usize,
+    /// **人が直したのに残せなかった数。**
+    ///
+    /// 人が直した音を、曲ファイルが同じ所の別の音に差し替えたとき。
+    /// どちらが正しいかは機械に決められない本物の衝突で、ここでは
+    /// 曲ファイルを採る（音符が増えて濁るより、頼んだ通りに直るほうがいい）。
+    /// **黙って消すのが一番よくない**ので、数だけでも持って帰る
+    pub lost: usize,
 }
 
 /// 音符を見分ける鍵。同じ所の同じ高さなら同じ音符とみなす。
@@ -107,6 +114,8 @@ fn merge(base: &[Note], user: &[Note], gen: &[Note]) -> (Vec<Note>, Sync) {
 
     let mut report = Sync::default();
     let mut out: Vec<Note> = Vec::with_capacity(gen.len() + added.len());
+    // 人が直したぶんのうち、置き場が見つかったもの
+    let mut placed: HashSet<(u32, i32)> = HashSet::new();
     for n in gen {
         if dropped.contains(&key(n)) {
             report.dropped += 1;
@@ -115,6 +124,7 @@ fn merge(base: &[Note], user: &[Note], gen: &[Note]) -> (Vec<Note>, Sync) {
         match changed.iter().find(|c| key(c) == key(n)) {
             Some(c) => {
                 out.push(c.clone());
+                placed.insert(key(c));
                 report.kept += 1;
             }
             None => {
@@ -123,13 +133,26 @@ fn merge(base: &[Note], user: &[Note], gen: &[Note]) -> (Vec<Note>, Sync) {
             }
         }
     }
-    // 人が足したぶん。曲ファイル側に同じ所があれば、そちらは上で入っている
+    // 人が足したぶん。**同じ所に曲ファイルの音があっても、人のほうを採る。**
+    //
+    // 飛ばすと「人が足したものは残る」の決まりが、長さと強さについてだけ
+    // 破れる（音は出るが、置いたときの長さではなくなる）
     for n in added {
-        if !out.iter().any(|o| key(o) == key(&n)) {
-            out.push(n);
-            report.kept += 1;
+        match out.iter().position(|o| key(o) == key(&n)) {
+            Some(i) => {
+                out[i] = n;
+                report.from_song -= 1;
+                report.kept += 1;
+            }
+            None => {
+                out.push(n);
+                report.kept += 1;
+            }
         }
     }
+    // 人が直したのに、曲ファイルがその所を別の音へ差し替えてしまったぶん。
+    // 本物の衝突。曲ファイルを採ったうえで、数だけ持って帰る
+    report.lost = changed.iter().filter(|c| !placed.contains(&key(c))).count();
     out.sort_by_key(|n| (n.pos, n.pitch));
     (out, report)
 }
@@ -218,11 +241,16 @@ impl Project {
     /// 音符は `(位置, 音程)` で同じものとみなす。
     ///
     /// - 人が消したものは、曲ファイル側にあっても消えたまま
-    /// - 人が足したものは残る
+    /// - 人が足したものは残る（**同じ所に曲ファイルの音があっても人が勝つ**）
     /// - 人が長さや強さを変えたものは、人の値が勝つ
     /// - **人が触っていないものは、曲ファイルの今の形になる** ← これが要点
     ///
-    /// 返すのは、混ぜたパートと `(曲ファイルから来た数, 人のぶん, 消したぶん)`。
+    /// 決められない場合が1つある。人が直した音を、曲ファイルが同じ所の
+    /// **別の音へ差し替えた**とき。どちらが正しいかは機械に決められない。
+    /// ここでは曲ファイルを採る（音符が増えて濁るより、頼んだ通りに直る
+    /// ほうがいい）。そのぶんは `lost` に数えて人に見せる。
+    ///
+    /// 返すのは、混ぜたパートと [`Sync`]（内訳）。
     pub fn resync(&mut self, generated: &HashMap<String, Vec<Note>>) -> Vec<(String, Sync)> {
         let mut out = Vec::new();
         for (part, base) in self.base.clone() {
@@ -459,6 +487,51 @@ mod tests {
         assert!(!got.iter().any(|x| x.pos == 4 && x.pitch == 62), "消した音が戻った");
         assert!(got.iter().any(|x| x.pos == 8), "曲ファイルが足した音が来ていない");
         assert_eq!(report[0].1.dropped, 1);
+    }
+
+    /// **人が置いた音の長さが、曲ファイルに上書きされないこと。**
+    ///
+    /// 「人が足したものは残る」と決めたのに、同じ所に曲ファイルも音を
+    /// 作ってくると、長さだけ曲ファイルのものになっていた
+    #[test]
+    fn a_note_the_person_placed_keeps_its_length() {
+        let mut p = Project::new("x");
+        p.take_over("lead", &[]);
+        p.notes.insert("lead".into(), vec![n(0, 69, 8)]); // 人が置いた。長さ8
+
+        // 曲ファイルも同じ所に作ってきた。長さは4
+        let mut now = HashMap::new();
+        now.insert("lead".to_string(), vec![n(0, 69, 4)]);
+        let report = p.resync(&now);
+
+        let got = &p.notes["lead"];
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].len, 8, "人が置いた長さが曲ファイルに負けた");
+        assert_eq!(report[0].1.kept, 1, "人のぶんとして数えていない");
+        assert_eq!(report[0].1.from_song, 0);
+    }
+
+    /// **人が直した音を曲ファイルが別物に差し替えたら、黙って消さないこと。**
+    ///
+    /// これは本物の衝突で、どちらが正しいかは機械に決められない。
+    /// 曲ファイルを採る（音符が増えて濁るより、頼んだ通りに直るほうがいい）
+    /// が、**何が起きたかは必ず言う**
+    #[test]
+    fn a_real_conflict_is_reported_not_swallowed() {
+        let mut p = Project::new("x");
+        p.take_over("lead", &[n(0, 69, 4)]);
+        p.notes.insert("lead".into(), vec![n(0, 69, 8)]); // 人は長さを直した
+
+        // 曲ファイルは同じ所の音程を変えてきた
+        let mut now = HashMap::new();
+        now.insert("lead".to_string(), vec![n(0, 71, 4)]);
+        let report = p.resync(&now);
+
+        let got = &p.notes["lead"];
+        assert_eq!(got.len(), 1, "音符が増えている: {got:?}");
+        assert_eq!(got[0].pitch, 71, "曲ファイルの直しが入っていない");
+        // **黙って消さない。** 数だけでも人に見せる
+        assert_eq!(report[0].1.lost, 1, "消えたことが伝わらない");
     }
 
     #[test]

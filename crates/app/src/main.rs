@@ -1437,8 +1437,14 @@ impl App {
                     }
                     let mut said: Vec<String> = Vec::new();
                     for (part, r) in &synced {
+                        // 残せなかったぶんは必ず言う。黙って消えるのが一番困る
+                        let lost = if r.lost > 0 {
+                            format!(" / **残せず{}**", r.lost)
+                        } else {
+                            String::new()
+                        };
                         said.push(format!(
-                            "{part}（曲{} / 手{} / 消{}）",
+                            "{part}（曲{} / 手{} / 消{}{lost}）",
                             r.from_song, r.kept, r.dropped
                         ));
                     }
