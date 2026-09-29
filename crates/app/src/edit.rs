@@ -57,8 +57,11 @@ pub enum ClipPart {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Grab {
     None,
-    /// 動かしている（掴んだ位置からのずれを覚えておく）
-    Move { part: String, index: usize, offset: f32 },
+    /// 動かしている（掴んだ位置からのずれを覚えておく）。
+    ///
+    /// **縦のずれも覚える。** 覚えずに「指のある段」へ合わせると、
+    /// 段を1つ外して掴んだときに、掴んだ瞬間に半音ずれる
+    Move { part: String, index: usize, offset: f32, pitch_off: i32 },
     /// 右端を掴んで長さを変えている
     Resize { part: String, index: usize },
     /// 四角で囲んで選んでいる（掴んだ所）
@@ -292,22 +295,10 @@ pub fn piano_roll(
     let rect = Rect::from_min_max(Pos2::new(whole.min.x, audio.max.y),
         Pos2::new(whole.max.x, whole.max.y - lane_h));
 
-    // 音程の範囲。手で置いたぶんも含める
-    let (mut lo, mut hi) = (127i32, 0i32);
-    for notes in score.values() {
-        for n in notes {
-            lo = lo.min(n.pitch);
-            hi = hi.max(n.pitch);
-        }
-    }
-    if lo > hi {
-        lo = 48;
-        hi = 84;
-    }
-    lo -= 3;
-    hi += 3;
+    // 音程の範囲。**今触っているパートに合わせる**（`pitch_range` を見よ）
+    let (lo, hi) = pitch_range(score, &ed.part);
     let rows = (hi - lo + 1) as f32;
-    let row_h = (rect.height() / rows).clamp(3.0, 20.0);
+    let row_h = (rect.height() / rows).clamp(ROW_MIN, 20.0);
 
     // ホイールで左右へ動かす。拡大は「何小節ぶん見るか」で決める。
     if resp.hovered() {
@@ -804,6 +795,14 @@ pub const VEL_H: f32 = 84.0;
 /// 音符の右端をつかむ幅（ピクセル）。
 const EDGE: f32 = 7.0;
 
+/// 掴むときに、上下何段まで大目に見るか。
+///
+/// 1段が 7〜12px しかないので、狙った段をぴったり指すのは難しい。
+/// 外すと「何も無い所を引きずった」ことになって、四角で囲む動きに化ける。
+/// **掴むときだけ**緩める。置くときは緩めない（すぐ上に音符があると、
+/// その隣に置けなくなる）
+const GRAB_ROWS: i32 = 1;
+
 /// 右端を掴んだ音符。
 ///
 /// **中に居るかどうかより先に、これを見る。**
@@ -817,13 +816,55 @@ const EDGE: f32 = 7.0;
 /// 今度は動かせなくなる
 fn edge_at(ns: &[Note], pitch: i32, x: f32, v: &View) -> Option<usize> {
     ns.iter().position(|n| {
-        if n.pitch != pitch {
+        if (n.pitch - pitch).abs() > GRAB_ROWS {
             return false;
         }
         let len = n.len.max(1);
         let band = EDGE.min(len as f32 * v.zoom * 0.4);
         (v.x_of((n.pos + len) as f32) - x).abs() <= band
     })
+}
+
+/// 1段をこれより低くしない。
+///
+/// これより低いと、音符が線になって掴めない。全部が入りきらなくても、
+/// **触れる大きさのほうを優先する**
+const ROW_MIN: f32 = 7.0;
+
+/// 画面に出す音程の幅。狭くしすぎない。
+const MIN_ROWS: i32 = 22;
+
+/// 縦に出す音程の範囲を決める。
+///
+/// **今触っているパートの音域に合わせる。** 曲に出てくる音程を全部入れると、
+/// ベースから旋律まで 45〜64段になり、1段が 5〜10px にまで潰れる。
+/// そこまで細いと、掴むのも動かすのも当たらない（実際そうなっていた）。
+///
+/// 旋律だけなら 15段ほどで済むので、同じ高さでも1段が3倍近く取れる。
+/// 他のパートは範囲から外れたぶんが見えなくなるが、触れないものが
+/// 見えていることより、触るものが掴めることのほうが大事。
+fn pitch_range(score: &Score, part: &str) -> (i32, i32) {
+    let span = |ns: &[Note]| -> Option<(i32, i32)> {
+        let lo = ns.iter().map(|n| n.pitch).min()?;
+        let hi = ns.iter().map(|n| n.pitch).max()?;
+        Some((lo, hi))
+    };
+    // 触っているパート → 曲全体 → 既定（C3〜C6）の順で当てる
+    let found = score
+        .get(part)
+        .and_then(|ns| span(ns))
+        .or_else(|| {
+            let all: Vec<Note> = score.values().flatten().cloned().collect();
+            span(&all)
+        })
+        .unwrap_or((48, 84));
+    let (mut lo, mut hi) = (found.0 - 3, found.1 + 3);
+    // 狭すぎると、隣の音へ動かす余地が画面に無くなる
+    while hi - lo + 1 < MIN_ROWS {
+        lo -= 1;
+        hi += 1;
+    }
+    (lo.max(0), hi.min(127))
 }
 
 /// 上に置く物差しの高さ。ここを触ると再生ヘッドが動く。
@@ -860,11 +901,21 @@ fn handle_input(
 
     // どの音符の上か。`ed` を借りたままにしないよう、パート名を写して持つ
     let part_name = ed.part.clone();
+    let over = |n: &Note| (n.pos as f32) <= step && step < (n.pos + n.len.max(1)) as f32;
     let hit = |project: &Project| -> Option<usize> {
         let ns = project.notes.get(&part_name)?;
-        ns.iter().position(|n| {
-            n.pitch == pitch && (n.pos as f32) <= step && step < (n.pos + n.len.max(1)) as f32
-        })
+        ns.iter().position(|n| n.pitch == pitch && over(n))
+    };
+    // 掴むとき用。**段を1つ外しても拾う。**
+    // 置くときの [`hit`] は緩めない（すぐ隣へ置けなくなる）
+    let grab_hit = |project: &Project| -> Option<usize> {
+        let ns = project.notes.get(&part_name)?;
+        ns.iter()
+            .enumerate()
+            .filter(|(_, n)| (n.pitch - pitch).abs() <= GRAB_ROWS && over(n))
+            // ぴったりの段を優先し、同じなら先に置いたものを
+            .min_by_key(|(i, n)| ((n.pitch - pitch).abs(), *i))
+            .map(|(i, _)| i)
     };
 
     // --- 右クリックで消す。選んでいるものの上なら、選んだぶん全部
@@ -890,7 +941,7 @@ fn handle_input(
         // 右端が先。中に居るかどうかはそのあと
         let ns = project.notes.get(&ed.part).cloned().unwrap_or_default();
         let on_edge = edge_at(&ns, pitch, pos.x, v);
-        if let Some(i) = on_edge.or_else(|| hit(project)) {
+        if let Some(i) = on_edge.or_else(|| grab_hit(project)) {
             let n = &project.notes[&ed.part][i];
             out.hit = Some((ed.part.clone(), n.pitch, n.vel, n.len));
             // 選んでいないものを掴んだら、それだけを選び直す。
@@ -901,7 +952,12 @@ fn handle_input(
             ed.grab = if on_edge.is_some() {
                 Grab::Resize { part: ed.part.clone(), index: i }
             } else {
-                Grab::Move { part: ed.part.clone(), index: i, offset: step - n.pos as f32 }
+                Grab::Move {
+                    part: ed.part.clone(),
+                    index: i,
+                    offset: step - n.pos as f32,
+                    pitch_off: pitch - n.pitch,
+                }
             };
         } else {
             // 何も無い所から引きずったら、四角で囲んで選ぶ
@@ -913,7 +969,7 @@ fn handle_input(
     // --- 動かす / 長さを変える
     if resp.dragged() {
         match ed.grab.clone() {
-            Grab::Move { part, index, offset } => {
+            Grab::Move { part, index, offset, pitch_off } => {
                 // 変える前に覚える。掴んでいるあいだは同じ Tag なので
                 // 何フレーム動かしても1段にまとまる
                 let want = (step - offset).max(0.0);
@@ -924,7 +980,9 @@ fn handle_input(
                     return;
                 };
                 let np = np.min(total.saturating_sub(now.len.max(1)));
-                let (dstep, dpitch) = (np as i32 - now.pos as i32, pitch - now.pitch);
+                // 掴んだときのずれを引いてから比べる。指の段そのものではない
+                let (dstep, dpitch) =
+                    (np as i32 - now.pos as i32, (pitch - pitch_off) - now.pitch);
                 if dstep == 0 && dpitch == 0 {
                     return;
                 }
@@ -937,7 +995,7 @@ fn handle_input(
                     if dpitch != 0 {
                         // 音程が動いたら、その音を返す。掴んだまま
                         // 上下すれば音階が聞こえる
-                        out.hit = Some((part.clone(), pitch, now.vel, now.len));
+                        out.hit = Some((part.clone(), now.pitch + dpitch, now.vel, now.len));
                     }
                     out.changed = true;
                 }
@@ -1038,6 +1096,71 @@ mod tests {
         }
     }
 
+    /// **音符が掴める大きさになっていること。**
+    ///
+    /// 曲に出てくる音程を全部入れていたので、1段が 5〜10px に潰れて
+    /// 掴めなかった。触っているパートに合わせれば、同じ高さでも太くなる
+    #[test]
+    fn the_rows_are_thick_enough_to_grab() {
+        let mut score: Score = Score::new();
+        // ベース（低い）と旋律（高い）。前はこの幅ぜんぶを画面に詰めていた
+        score.insert("bass".into(), vec![note(0, 4, 40), note(4, 4, 47)]);
+        score.insert("lead".into(), vec![note(0, 4, 67), note(4, 4, 81)]);
+
+        let (lo, hi) = pitch_range(&score, "lead");
+        let rows = hi - lo + 1;
+        assert!(rows <= 26, "旋律を触っているのに {rows} 段も出している");
+        assert!(lo <= 67 && hi >= 81, "触っているパートが画面から外れている");
+
+        // よくある高さで、指で掴める太さになること
+        for h in [300.0f32, 500.0] {
+            let row_h = (h / rows as f32).clamp(ROW_MIN, 20.0);
+            assert!(row_h >= 11.0, "高さ{h}で1段 {row_h:.1}px しかない");
+        }
+
+        // パートを変えれば、そちらへ寄ること
+        let (lo2, hi2) = pitch_range(&score, "bass");
+        assert!(lo2 <= 40 && hi2 >= 47, "ベースが画面から外れている");
+        assert!(hi2 < 67, "旋律まで入れている（また潰れる）");
+    }
+
+    #[test]
+    fn a_narrow_part_still_gets_room_to_move() {
+        // 1音しか無いパート。ここを音域そのままにすると、
+        // 上下へ動かす余地が画面に無くなる
+        let mut score: Score = Score::new();
+        score.insert("lead".into(), vec![note(0, 4, 60)]);
+        let (lo, hi) = pitch_range(&score, "lead");
+        assert!(hi - lo + 1 >= MIN_ROWS, "幅が {} しかない", hi - lo + 1);
+        assert!(lo < 60 && hi > 60, "音符が端に寄っている");
+    }
+
+    #[test]
+    fn an_empty_part_falls_back_to_something_sensible() {
+        let mut score: Score = Score::new();
+        score.insert("bass".into(), vec![note(0, 4, 40)]);
+        // まだ音符の無いパートを触っている → 曲全体から当てる
+        let (lo, hi) = pitch_range(&score, "lead");
+        assert!(lo <= 40 && hi >= 40, "曲の音程が入っていない");
+        // 曲にも何も無ければ既定
+        let (lo, hi) = pitch_range(&Score::new(), "lead");
+        assert!(lo <= 48 && hi >= 84, "既定が狭い（{lo}〜{hi}）");
+        assert!((0..=127).contains(&lo) && (0..=127).contains(&hi));
+    }
+
+    /// 段を1つ外しても掴めること。ただし**掴んだ瞬間にずれない**こと。
+    #[test]
+    fn a_near_miss_still_grabs_the_note() {
+        let v = view();
+        let ns = vec![note(0, 4, 60)];
+        let right = v.x_of(4.0);
+        // 1段上・1段下からでも、右端として掴める
+        assert_eq!(edge_at(&ns, 61, right, &v), Some(0), "1段上から掴めない");
+        assert_eq!(edge_at(&ns, 59, right, &v), Some(0), "1段下から掴めない");
+        // 2段離れたら掴まない（隣の音符を巻き込まないため）
+        assert_eq!(edge_at(&ns, 62, right, &v), None, "2段離れても掴んだ");
+    }
+
     fn note(pos: u32, len: u32, pitch: i32) -> Note {
         Note { pos, len, pitch, vel: 100, mora: String::new() }
     }
@@ -1063,8 +1186,9 @@ mod tests {
         // 遠い所は掴まない
         assert_eq!(edge_at(&ns, 60, right + 20.0, &v), None, "遠すぎるのに掴んだ");
         assert_eq!(edge_at(&ns, 60, v.x_of(1.0), &v), None, "真ん中で掴んだ");
-        // 音程が違えば掴まない
-        assert_eq!(edge_at(&ns, 61, right, &v), None, "隣の段で掴んだ");
+        // 離れた段は掴まない（隣1段までは大目に見る。
+        // [`a_near_miss_still_grabs_the_note`] を見よ）
+        assert_eq!(edge_at(&ns, 64, right, &v), None, "離れた段で掴んだ");
     }
 
     /// 短い音符で、帯が音符を覆い尽くさないこと。
