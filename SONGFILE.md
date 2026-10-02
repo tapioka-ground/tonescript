@@ -212,6 +212,37 @@ let MELODY = #{
 **You get the pitches you wrote.** Nothing is transposed or snapped to a
 chord (only `TRANSPOSE` moves anything).
 
+### `LINES` — a second tune on top (harmony, counter-melody)
+
+`MELODY` is the `lead` part only. To lay another line over it, write it here,
+by part name and then by bar — **the bar part is written exactly like `MELODY`**.
+
+```rhai
+let VOICES = #{
+    lead: #{ ch: 0, patch: "aah" },
+    harm: #{ ch: 1, patch: "aah", label: "harmony" },   // must be here
+};
+let LINES = #{
+    harm: #{
+        "1": bar([[8, "F#4"], [8, "G4"]]),
+        "3": bar([[16, "rest"]]),
+    },
+};
+let ARRANGE = #{ "1": ["lead", "harm"], "2": ["lead"], "3": ["lead", "harm"] };
+```
+
+- Sums, rests and bar numbers are checked the same way as `MELODY`; the
+  message starts with the place, e.g. `LINES.harm: bar 1 melody sums to 8/16`
+- **The part must be in `VOICES`.** Without a voice it would not sound, and
+  nothing would say why, so loading stops
+- **`ARRANGE` decides where it plays.** A bar the part is left out of is silent,
+  even if it is written here
+- `lead` cannot be written here (it is `MELODY`)
+- `TRANSPOSE` moves it together with `lead`, so a key change takes the
+  harmony along
+- Velocity starts at 92 — a little under `lead` (108), so the harmony does
+  not take over as the main voice
+
 ### `CHORDS` — harmony
 
 Bar number → chord. Feeds `bass`, `sub`, `arp` and `chords`.
@@ -1032,6 +1063,7 @@ Worth telling the AI up front:
 | `SWING_GRID` | | steps per swung unit | 2 |
 | `CHORDS` | | bar → chord | none |
 | `MELODY` | | bar → melody | none |
+| `LINES` | | part → bar → melody | none |
 | `ARRANGE` | | bar → parts | none (= silence) |
 | `TRANSPOSE` | | bar → semitones | none |
 | `BAR_ACCENT` | | bar → multiplier | 1.0 |

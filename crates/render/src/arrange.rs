@@ -149,6 +149,30 @@ pub fn build(song: &Song) -> Result<Score, String> {
             }
         }
 
+        // --- 追加の旋律（ハモリ・対旋律）。lead と同じ作り方で、パートごとに
+        for (part, line) in &song.lines {
+            if !song.plays(bar, part) {
+                continue;
+            }
+            let Some(notes) = line.get(&bar) else { continue };
+            let mut at = base;
+            for (mora, len, name) in notes {
+                if name != "rest" {
+                    let p = note_number(name)
+                        .ok_or_else(|| format!("{part} {bar}小節目: 音名として読めません: {name}"))?;
+                    score.entry(part.clone()).or_default().push(Note {
+                        pos: at,
+                        len: *len,
+                        pitch: p + tr,
+                        // 主旋律より少し控えめに。前に出すぎると主役が入れ替わる
+                        vel: vel_of(song, bar, 92.0),
+                        mora: mora.clone().unwrap_or_default(),
+                    });
+                }
+                at += len;
+            }
+        }
+
         let chord = song.chords.get(&bar);
 
         // --- ベース

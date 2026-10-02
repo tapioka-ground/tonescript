@@ -116,6 +116,49 @@ fn need_field<'a>(m: &'a Map, key: &str, what: &str) -> R<&'a Dynamic> {
 }
 
 /// 「小節番号 -> 何か」の表。Rhai の表は鍵が文字列なので、数として読む。
+/// 1小節ぶんの旋律 `[[長さ, 音名], ...]` を読む。`MELODY` と `LINES` で共通。
+type Line = Vec<(Option<String>, u32, String)>;
+
+fn read_line(x: &Dynamic) -> R<Line> {
+    let a = arr(x, "小節の旋律")?;
+    let mut out = Vec::new();
+    for it in a.iter() {
+        let p = arr(it, "音符")?;
+        if p.len() < 2 {
+            return shape("音符は [長さ, 音名] の2つです");
+        }
+        let len = int(&p[0], "音符の長さ")? as u32;
+        let name = text(&p[1], "音符の音名")?;
+        let mora = if p.len() > 2 { Some(text(&p[2], "歌詞")?) } else { None };
+        out.push((mora, len, name));
+    }
+    Ok(out)
+}
+
+/// 合計が1小節ぶんかを読み込み時に検算する。
+/// 何目盛りが1小節かは拍子で変わるので、小節ごとに見る。
+///
+/// `what` は「どの欄か」。`MELODY` は空にして、前置き無しの文面のまま出す。
+fn check_line(s: &Song, what: &str, line: &HashMap<u32, Line>, total_bars: u32) -> R<()> {
+    let at = if what.is_empty() { String::new() } else { format!("{what}: ") };
+    for (bar, notes) in line {
+        if *bar == 0 || *bar > total_bars {
+            return shape(format!(
+                "{at}{bar}小節目に旋律がありますが、曲は {total_bars} 小節しかありません"
+            ));
+        }
+        let want = s.bar_steps(*bar);
+        let total: u32 = notes.iter().map(|(_, l, _)| l).sum();
+        if total != want {
+            let m = s.meter_at(*bar);
+            return shape(format!(
+                "{at}{bar}小節目の旋律の合計が {total}/{want} です（拍子 {m}）"
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn bar_map<T, F>(v: &Dynamic, what: &str, mut f: F) -> R<HashMap<u32, T>>
 where
     F: FnMut(&Dynamic) -> R<T>,
@@ -314,37 +357,20 @@ fn build(scope: &Scope) -> R<Song> {
 
     // --- 旋律
     if let Some(v) = get(scope, "MELODY") {
-        s.melody = bar_map(&v, "MELODY", |x| {
-            let a = arr(x, "小節の旋律")?;
-            let mut out = Vec::new();
-            for it in a.iter() {
-                let p = arr(it, "音符")?;
-                if p.len() < 2 {
-                    return shape("音符は [長さ, 音名] の2つです");
-                }
-                let len = int(&p[0], "音符の長さ")? as u32;
-                let name = text(&p[1], "音符の音名")?;
-                let mora = if p.len() > 2 { Some(text(&p[2], "歌詞")?) } else { None };
-                out.push((mora, len, name));
+        s.melody = bar_map(&v, "MELODY", read_line)?;
+        check_line(&s, "", &s.melody, total_bars)?;
+    }
+
+    // --- 追加の旋律（ハモリ・対旋律）。書き方は MELODY と同じ
+    if let Some(v) = get(scope, "LINES") {
+        for (name, inner) in map(&v, "LINES")?.iter() {
+            let what = format!("LINES.{name}");
+            if name.as_str() == "lead" {
+                return shape("LINES に lead は書けません。lead の旋律は MELODY に書きます");
             }
-            Ok(out)
-        })?;
-        // 合計が1小節ぶんかを読み込み時に検算する。
-        // 何目盛りが1小節かは拍子で変わるので、小節ごとに見る。
-        for (bar, notes) in &s.melody {
-            if *bar == 0 || *bar > total_bars {
-                return shape(format!(
-                    "{bar}小節目に旋律がありますが、曲は {total_bars} 小節しかありません"
-                ));
-            }
-            let want = s.bar_steps(*bar);
-            let total: u32 = notes.iter().map(|(_, l, _)| l).sum();
-            if total != want {
-                let m = s.meter_at(*bar);
-                return shape(format!(
-                    "{bar}小節目の旋律の合計が {total}/{want} です（拍子 {m}）"
-                ));
-            }
+            let line = bar_map(inner, &what, read_line)?;
+            check_line(&s, &what, &line, total_bars)?;
+            s.lines.insert(name.to_string(), line);
         }
     }
 
@@ -480,6 +506,16 @@ fn build(scope: &Scope) -> R<Song> {
                     .unwrap_or_else(|| "#888888".into()),
             },
         );
+    }
+
+    // LINES のパートは VOICES に無いと鳴らない。鳴らない理由が分かりにくいので、
+    // 読み込みの時点で止める
+    for name in s.lines.keys() {
+        if !s.voices.contains_key(name) {
+            return shape(format!(
+                "LINES.{name} のパートが VOICES にありません。音色を決めるのに要ります"
+            ));
+        }
     }
 
     if let Some(v) = get(scope, "EDIT_PARTS") {

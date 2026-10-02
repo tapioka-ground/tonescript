@@ -367,6 +367,12 @@ pub struct Song {
     pub chords: HashMap<u32, Chord>,
     /// 通し小節 -> その小節の旋律
     pub melody: HashMap<u32, Vec<(Option<String>, u32, String)>>,
+    /// パート名 -> 通し小節 -> その小節の旋律。
+    ///
+    /// `MELODY` は `lead` の1本だけ。ハモリや対旋律のように、旋律をもう1本
+    /// 重ねたいときはここに書く。書き方は `MELODY` と同じ。
+    /// 鳴らすかどうかは `ARRANGE`、音色は `VOICES` で決まる
+    pub lines: HashMap<String, HashMap<u32, Vec<(Option<String>, u32, String)>>>,
     /// 通し小節 -> 鳴らすパート
     pub arrange: HashMap<u32, Vec<String>>,
     /// 通し小節 -> 半音いくつ上げるか
